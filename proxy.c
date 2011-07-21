@@ -103,7 +103,6 @@ struct client
 
 void done(struct client*, int id);
 
-#ifdef _DEBUG
 FILE  *g_flog;
 #define FBUF  75
 
@@ -213,8 +212,6 @@ ssize_t wraprecv(int s, void *buf, size_t len, int flags) {
 
 #define write  wrapwrite
 #define recv  wraprecv
-
-#endif // _DEBUG
 
 void closeAll(int in) {
   int ix;
