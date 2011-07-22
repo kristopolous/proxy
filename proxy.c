@@ -710,13 +710,11 @@ int main(int argc, char*argv[]) {
   FD_ZERO(&g_eg_fds);
   FD_ZERO(&g_wg_fds);
 
-#ifdef _DEBUG
   g_flog = fopen("/dev/stdout", "w");
 
   if(!g_flog) {
     exit(0);
   }
-#endif // _DEBUG
 
   addr.sa_family = AF_INET;
   strcpy(addr.sa_data, "somename");
