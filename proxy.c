@@ -720,7 +720,7 @@ int main(int argc, char*argv[]) {
   strcpy(addr.sa_data, "somename");
   memset(g_dbase, 0, sizeof(g_dbase));
   while(argc > 0) {
-    if(ISA("-P", "--port")) {
+    if(ISA("-p", "--port")) {
       if(--argc)  {
         port = htons(atoi(*++argv));
       }
@@ -734,17 +734,17 @@ int main(int argc, char*argv[]) {
       g_fast = 1;
     }
 #endif // _DEBUG
-    else if(ISA("-T", "--try")) {
+    else if(ISA("-t", "--try")) {
       try = 1;
-    } else if(ISA("-A", "--absolute")) {
+    } else if(ISA("-a", "--absolute")) {
       if(--argc) {
         g_absolute = *++argv;
       }
     } else if(ISA("-H", "--help")) {
       printf("%s\n", progname);
-      printf("\t-P --port\tWhat part to run on\n");
-      printf("\t-T --try\tIncrementally try ports\n");
-      printf("\t-A --absolute\tAbsolute address for proxying to\n");
+      printf("\t-p --port\tWhat part to run on\n");
+      printf("\t-t --try\tIncrementally try ports\n");
+      printf("\t-a --absolute\tAbsolute address for proxying to\n");
 #ifdef _DEBUG
       printf("\t-v --verbose\tVerbose logging\n");
       printf("\t-S --screen\tScreen printing\n");
@@ -781,10 +781,8 @@ int main(int argc, char*argv[]) {
   ptr = (struct sockaddr_in*)&addr;
   listen(g_proxyfd, SMALL);
 
-  if(try) {
-    printf("Listening on port %d", ntohs(proxy.sin_port));
-    fflush(0);
-  }
+  printf("Listening on port %d", ntohs(proxy.sin_port));
+  fflush(0);
 
   // This is the main loop
   for(;;) {
@@ -796,5 +794,6 @@ int main(int argc, char*argv[]) {
 
     sendstuff();
   }
+
   return(0);
 }
