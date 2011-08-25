@@ -114,6 +114,8 @@ char
 
 unsigned char g_fbuf[FBUF];
 
+struct linger g_linger_t = { 1, 0 };
+
 ssize_t wrapwrite(int fd, const void*buf, size_t count) {
   ssize_t ret;  
   int ix = 0;
@@ -217,7 +219,7 @@ void closeAll(int in) {
   int ix;
   struct client* pClient;
 
-  fprintf(stderr, "-- shutting down --\n");
+  fprintf(stderr, "\n-- shutting down --\n");
   fprintf(stderr, "Connections: ");
 
   for(ix = 0; ix < MAX; ix++) {
@@ -501,6 +503,12 @@ int relaysetup(struct client*t) {
   }
 
   t->serverfd = socket(AF_INET, SOCK_STREAM, 0);
+
+  ret = setsockopt(t->serverfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger));
+  if(ret) {
+    perror("setsockopt");
+  }
+
   name.sin_family = AF_INET;
   name.sin_port = htons(t->port);
   memcpy(&name.sin_addr.s_addr, hp->h_addr, hp->h_length);
@@ -625,6 +633,7 @@ void doselect() {
     hi, 
     i;  
 
+  static char buf[128];
   char toggle[5] = {0};
 
   struct client *c;
@@ -686,6 +695,10 @@ void doselect() {
   memset(g_fds, 0, SMALL);
 
   select(hi + 1, &g_rg_fds, &g_wg_fds, &g_eg_fds, 0);
+
+  if(FD_ISSET(0, &g_rg_fds)) {
+    read(0, buf, 128);
+  }
 }
 
 int main(int argc, char*argv[]) {   
@@ -764,6 +777,11 @@ int main(int argc, char*argv[]) {
   proxy.sin_port = port;
   proxy.sin_addr.s_addr = INADDR_ANY;
   g_proxyfd = socket(PF_INET, SOCK_STREAM, 0);
+
+  ret = setsockopt(g_proxyfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger));
+  if(ret) {
+    perror("setsockopt");
+  }
 
   while(bind(g_proxyfd, (struct sockaddr*)&proxy, sizeof(proxy)) < 0) {  
     fprintf(stderr, ".");
