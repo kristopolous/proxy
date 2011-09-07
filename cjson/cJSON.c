@@ -130,9 +130,9 @@ static char *print_number(cJSON *item)
 		str=(char*)cJSON_malloc(64);	/* This is a nice tradeoff. */
 		if (str)
 		{
-			if (fabs(floor(d)-d)<=DBL_EPSILON)			sprintf(str,"%.0f",d);
-			else if (fabs(d)<1.0e-6 || fabs(d)>1.0e9)	sprintf(str,"%e",d);
-			else										sprintf(str,"%f",d);
+			if (fabs(floor(d)-d)<=DBL_EPSILON)			sprintf(str,"%.03f",d);
+//			else if (fabs(d)<1.0e-6 || fabs(d)>1.0e9)	sprintf(str,"%e",d);
+			else										sprintf(str,"%.03f",d);
 		}
 	}
 	return str;
@@ -153,8 +153,8 @@ static const char *parse_string(cJSON *item,const char *str)
 	ptr=str+1;ptr2=out;
 	while (*ptr!='\"' && *ptr)
 	{
-		if (*ptr!='\\') *ptr2++=*ptr++;
-		else
+//		if (*ptr!='\\') *ptr2++=*ptr++;
+//		else
 		{
 			ptr++;
 			switch (*ptr)
@@ -193,7 +193,7 @@ static char *print_string_ptr(const char *str)
 	const char *ptr;char *ptr2,*out;int len=0;unsigned char token;
 	
 	if (!str) return cJSON_strdup("");
-	ptr=str;while ((token=*ptr) && ++len) {if (strchr("\"\\\b\f\n\r\t",token)) len++; else if (token<32) len+=5;ptr++;}
+	ptr=str;while ((token=*ptr) && ++len) {if (strchr("\"\b\f\n\r\t",token)) len++; else if (token<32) len+=5;ptr++;}
 	
 	out=(char*)cJSON_malloc(len+3);
 	if (!out) return 0;
@@ -202,7 +202,7 @@ static char *print_string_ptr(const char *str)
 	*ptr2++='\"';
 	while (*ptr)
 	{
-		if ((unsigned char)*ptr>31 && *ptr!='\"' && *ptr!='\\') *ptr2++=*ptr++;
+		if ((unsigned char)*ptr>31 && *ptr!='\"' ) *ptr2++=*ptr++;
 		else
 		{
 			*ptr2++='\\';
@@ -215,7 +215,7 @@ static char *print_string_ptr(const char *str)
 				case '\n':	*ptr2++='n';	break;
 				case '\r':	*ptr2++='r';	break;
 				case '\t':	*ptr2++='t';	break;
-				default: sprintf(ptr2,"u%04x",token);ptr2+=5;	break;	/* escape and print */
+//				default: sprintf(ptr2,"u%04x",token);ptr2+=5;	break;	/* escape and print */
 			}
 		}
 	}

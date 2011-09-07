@@ -1,47 +1,67 @@
-/* Simple proxy
+/* 
+ * Debugging proxy
+ * See https://github.com/kristopolous/proxy for more details
  *
- * (C) Copyright 2005, 2008, 2011 Christopher J. McKenzie under the terms of the
- *   GNU Public License, incorporated herein by reference
+ * (c) Copyright 2005, 2008, 2011 Christopher J. McKenzie 
  *
- *  Proxies work like this
+ * Permission is hereby granted, free of charge, to any person obtaining a copy 
+ * of this software and associated documentation files (the "Software"), to deal 
+ * in the Software without restriction, including without limitation the rights 
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies 
+ * of the Software, and to permit persons to whom the Software is furnished to do 
+ * so, subject to the following conditions:
  *
- *  client->proxy->server
- *  server->proxy->client
+ * The above copyright notice and this permission notice shall be included in all 
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+ * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
+ * PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT 
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION 
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <fcntl.h>
-#include <time.h>
-#include <langinfo.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <stdlib.h>
 #include <arpa/inet.h>
-#include <sys/socket.h>
+
 #include <netinet/in.h>
+
+#include <sys/stat.h>
+#include <sys/timeb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+
+#include <fcntl.h>
+#include <langinfo.h>
 #include <netdb.h>
 #include <signal.h>
 #include <string.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
-#define SMALL  128 
-#define MEDIUM  1024
-#define LARGE  16384
-#define MAX  32
+#include "cjson/cJSON.h"
 
-enum {
-  HTTP, 
-  HTTPS, 
-  UNKNOWN
-};
+#define LARGE  16384
+#define MAX  128
+
+#define EMIT emit(
+#define END ,_END);
 
 enum {
   FALSE, 
   TRUE, 
+
+  TYPE,
+
+  TEXT, 
+  CONNECTION,
+  
+  _END
 };
 
 #define CHR(sz)   (char*)malloc(sizeof(char)*(sz))
-#define TRIES  5
 
 #define READSERVER  0x01
 #define READCLIENT  0x02
@@ -82,8 +102,9 @@ struct client {
 #define NULLFREE(_a_)    if((_a_)) { free((_a_)); (_a_) = 0; }
 
 char
+  g_buf[LARGE],
   *g_absolute = 0,
-  g_fds[SMALL];
+  g_fds[MAX];
 
 const char  *g_strhost = "Host: ";
 
@@ -101,40 +122,59 @@ struct client
   g_dbase[MAX],
   *g_forsig;
 
+struct linger g_linger_t = { 1, 0 };
+
 void done(struct client*, int id);
 
-FILE  *g_flog;
-#define FBUF  75
+void emit(int firstarg, ...) {
+	cJSON *root = cJSON_CreateObject();	
 
-char 
-  g_logall = 0,
-  g_oldformat = 0,
-  g_screen = 0,
-  g_fast = 0;
+  struct timeb tp;
+  double ts;
 
-unsigned char g_fbuf[FBUF];
+  va_list ap;
 
-struct linger g_linger_t = { 1, 0 };
+  char 
+    *string,
+    *output;
+
+  int 
+    ix,
+    len,
+    type;
+
+  ftime(&tp);
+  ts = tp.time * 1000 + tp.millitm;
+
+  cJSON_AddNumberToObject(root, "timestamp", ts / 1000);
+
+  va_start(ap, firstarg);
+
+  for(type = firstarg; type != _END; type = va_arg(ap, int)) {
+
+    if(type == TYPE) {
+      cJSON_AddStringToObject(root, "type", va_arg(ap, char*));
+    } else if(type == TEXT) {
+      cJSON_AddStringToObject(root, "text", va_arg(ap, char*));
+    } else if(type == CONNECTION) {
+      cJSON_AddNumberToObject(root, "connection", va_arg(ap, int));
+    }
+  }
+
+  va_end(ap);
+
+  output = cJSON_PrintUnformatted(root);
+  printf("%s\n", output);
+  fflush(0);
+
+  cJSON_Delete(root);
+  free(output);
+}
 
 ssize_t wrapwrite(int fd, const void*buf, size_t count) {
   ssize_t ret;  
-  int ix = 0;
-
-  if(g_logall == 0) {
-    memset(g_fbuf, 0, FBUF);
-
-    while(ix < FBUF && ix < count && ((const char*)buf)[ix] >= ' ') {
-      ix++;
-    }
-
-    memcpy(g_fbuf, buf, ix);
-  }
 
   ret = write(fd, buf, count);
-
-  if(g_oldformat == 1) {
-    fflush(g_flog);
-  }
 
   return(ret);
 }
@@ -142,73 +182,42 @@ ssize_t wrapwrite(int fd, const void*buf, size_t count) {
 ssize_t wraprecv(int s, void *buf, size_t len, int flags) {  
   ssize_t ret;  
   int ix = 0;
-  int ctr = 0;
+  char *binbuf, *binbufStart;
 
   ret = recv(s, buf, len, flags);
 
+  char *ptr = (char*)buf;
   if(ret < len && ret > 0) {
-    ((char*)buf)[ret] = 0;
+    ptr[ret] = 0;
   }
 
   if(ret < 1) {
     return(ret);
   }
 
-  if(g_logall == 0) {
-    memset(g_fbuf, 0, FBUF);
+  binbufStart = binbuf = (char*) malloc(ret * 4 + 1);
 
-    while(ix < FBUF && ix < len && ((const char*)buf)[ix] >= ' ') {
-      ix++;
-    }
-
-    memcpy(g_fbuf, buf, ix);
-  }
-
-  if(g_fast == 1) {
-    fprintf(g_flog, "%03d ----\n%s\n", g_which, (g_logall == 1) ? (char*)buf : (char*)g_fbuf);
-  } else {
-    char *ptr = (char*)buf;
-    
-    fprintf(g_flog, "\n");
-    fprintf(g_flog, "%2d ", g_which);
-
-    for(ix = 0 ; ix < ret; ix++) {
-
-      if(ptr[ix] < 127) {
-
-        if(ptr[ix] < ' ') {
-
-          if(ptr[ix] == '\n' || ptr[ix] == '\r') {
-            fprintf(g_flog, "%c", ptr[ix]);
-            ctr++;
-          } else {
-            fprintf(g_flog, "<Binary>");
-            break;
-          }
-        } else {
-          fprintf(g_flog, "%c", ptr[ix]);
-          ctr++;
-        }
-      } else {
-        break;
-      }
-
-      if(ptr[ix] == '\n') {
-        fprintf(g_flog, "%2d ",  g_which);
-        ctr=0;
-      }
-
-      if(ctr == 80) {
-        fprintf(g_flog, "\n - ");
-        ctr=0;
-      }
+  for(ix = 0; ix < ret; ix++) {
+    if( (ptr[ix] < 32 || ptr[ix] > 127) && 
+        (ptr[ix] != '\n' && ptr[ix] != '\r' && ptr[ix] != '\t')
+      ) {
+      sprintf(binbuf, "\\u%02x", ptr[ix]);
+      binbuf += 4;
+    } else {
+      binbuf[0] = ptr[ix];
+      binbuf += 1;
     }
   }
 
-  fprintf(g_flog, "}\n");
+  binbuf[0] = 0;
 
-  fflush(g_flog);
+  EMIT
+    TYPE, "payload",
+    CONNECTION, g_which,
+    TEXT, binbufStart
+  END
 
+  free(binbufStart);
   return(ret);
 }
 
@@ -219,18 +228,25 @@ void closeAll(int in) {
   int ix;
   struct client* pClient;
 
-  fprintf(stderr, "\n-- shutting down --\n");
-  fprintf(stderr, "Connections: ");
-
   for(ix = 0; ix < MAX; ix++) {
     pClient = &g_dbase[ix];
+
     if(pClient->active) {
-      fprintf(stderr, "%5d", ix);
+
+      EMIT
+        TYPE, "shutdown",
+        CONNECTION, ix
+      END
+
       done(pClient, ix);
     }
   }
 
-  fprintf(stderr, "\nMain server\n");
+  EMIT
+    TYPE, "shutdown",
+    CONNECTION, -1
+  END
+
   shutdown(g_proxyfd, SHUT_RDWR);
   close(g_proxyfd);
 
@@ -238,42 +254,43 @@ void closeAll(int in) {
 }
 
 void done(struct client*cur, int id) {
-  int ix = 0;
+  if (cur->active) {
+    if(cur->clientfd) {
+      shutdown(cur->clientfd, SHUT_RDWR);
+      close(cur->clientfd);
+    }
 
-  if(cur->clientfd) {
-    shutdown(cur->clientfd, SHUT_RDWR);
-    close(cur->clientfd);
+    if(cur->serverfd) {
+      shutdown(cur->serverfd, SHUT_RDWR);
+      close(cur->serverfd);
+    }
+
+    if(cur->toserver)  {
+      memset(cur->toserver, 0, cur->tsmax);
+    }  
+
+    if(cur->toclient) {
+      memset(cur->toclient, 0, cur->tcmax);
+    }
+
+    cur->active = FALSE;
+    cur->tcsize = 0;
+    cur->tssize = 0;
+    cur->todo = 0;
+    cur->clientfd = 0;
+    cur->serverfd = 0;
+    cur->coffset = cur->toclient;
+    cur->soffset = cur->toserver;
+
+    NULLFREE(cur->host);
+    NULLFREE(cur->oldhost);
+    NULLFREE(cur->reqtype);
+
+    EMIT
+      TYPE, "close",
+      CONNECTION, id
+    END
   }
-  if(cur->serverfd) {
-    shutdown(cur->serverfd, SHUT_RDWR);
-    close(cur->serverfd);
-  }
-
-  if(cur->toserver)  {
-    memset(cur->toserver, 0, cur->tsmax);
-  }  
-
-  if(cur->toclient) {
-    memset(cur->toclient, 0, cur->tcmax);
-  }
-  cur->active = FALSE;
-  cur->tcsize = 0;
-  cur->tssize = 0;
-  cur->todo = 0;
-  cur->clientfd = 0;
-  cur->serverfd = 0;
-  cur->coffset = cur->toclient;
-  cur->soffset = cur->toserver;
-
-  NULLFREE(cur->host);
-  NULLFREE(cur->oldhost);
-  NULLFREE(cur->reqtype);
-
-  for(ix = 0; ix < (8 * id); ix++) {
-    printf(" ");
-  }
-
-  printf("%2d:close\n", id);
 }
 
 void handle_bp(int in) {
@@ -295,7 +312,6 @@ void process(struct client*toprocess) {
 
   ptr = toprocess->toserver;
   // These are the default values
-  toprocess->proto = HTTP;
   toprocess->port = 80;
 
   // The request is something like:
@@ -340,6 +356,7 @@ void process(struct client*toprocess) {
 
         // Get the command out
         tptr = beg = ptr+1;
+
         while(ptr++) {
           if(*ptr == ' ') {
             break;
@@ -359,7 +376,6 @@ void process(struct client*toprocess) {
     if(req[0] != '/')  {  
       if(req[4] == 's') {
         // Look for https requests
-        toprocess->proto = HTTPS;
         tptr = req + 8;
       } else {
         tptr = req + 7;
@@ -369,14 +385,15 @@ void process(struct client*toprocess) {
 
       // Since http://host:port/something is valid
       while(ptr++) {
-        //port
+
+        // port
         if(*ptr == ':') {  
           toprocess->port = 0;
           toprocess->host = (char*)malloc(ptr - tptr + 1);
           memcpy(toprocess->host, tptr, ptr - tptr);
           toprocess->host[ptr-tptr] = 0;
 
-          //An atoi routine
+          // An atoi routine
           while(ptr++) {
             if(*ptr < '0' || *ptr > '9') {
               break;
@@ -428,6 +445,7 @@ void process(struct client*toprocess) {
       if(*beg == 0) {  
         ptr++;
         tptr = ptr;
+
         while(*ptr > ' ') {
           ptr++;
         }
@@ -437,6 +455,7 @@ void process(struct client*toprocess) {
           memcpy(toprocess->host, tptr, ptr-tptr);
           toprocess->host[ptr-tptr] = 0;
         }
+
         break;
       }
     }
@@ -448,9 +467,7 @@ void process(struct client*toprocess) {
 }
 
 
-//
 // Associates new connection with a database entry
-//
 void newconnection(int c) {  
   socklen_t addrlen; 
   struct sockaddr addr;
@@ -492,13 +509,17 @@ int relaysetup(struct client*t) {
   int ret;
 
   g_forsig = t;
+
   // We don't have an active connection to the server yet
   hp = gethostbyname(t->host);
 
-  //Couldn't resolve
+  // Couldn't resolve
   if(!hp)  {
-    printf("Couldn't resolve %s!", t->host);
-    fflush(stdout);  
+    EMIT
+      TYPE, "error",
+      TEXT, "Couldn't resolve host!"
+    END
+
     return(0);  //This is not a stupendous response
   }
 
@@ -506,13 +527,26 @@ int relaysetup(struct client*t) {
 
   ret = setsockopt(t->serverfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger));
   if(ret) {
-    perror("setsockopt");
+
+    EMIT
+      TYPE, "error",
+      TEXT, "setsockopt"
+    END
   }
 
   name.sin_family = AF_INET;
   name.sin_port = htons(t->port);
   memcpy(&name.sin_addr.s_addr, hp->h_addr, hp->h_length);
   ret = connect(t->serverfd, (const struct sockaddr*)&name, sizeof(name));
+
+  if(ret) {
+
+    EMIT
+      TYPE, "error",
+      TEXT, "connect"
+    END
+  }
+
   fcntl(t->serverfd, F_SETFL, O_NONBLOCK);
 
   if(!t->toclient) {
@@ -524,9 +558,7 @@ int relaysetup(struct client*t) {
   return(1);
 }
 
-//
 // Some things can be enqueued
-//
 void sendstuff() {  
 
   int 
@@ -553,7 +585,7 @@ void sendstuff() {
 
           if(t->tsmax - size < 10) {
             t->toserver = realloc(t->toserver, t->tsmax << 1);
-            memset(t->toserver+t->tsmax, 0, t->tsmax);
+            memset(t->toserver + t->tsmax, 0, t->tsmax);
             t->tsmax <<= 1;
           }
 
@@ -573,8 +605,6 @@ void sendstuff() {
         if(!t->serverfd) {
           relaysetup(t);
         }
-//        t->todo &= ~READCLIENT;
- //       fprintf(stderr, "Done reading from client");
       }
       // Writing to the server
       if(FD_ISSET(t->serverfd, &g_wg_fds)) {  
@@ -583,7 +613,7 @@ void sendstuff() {
         size = write(t->serverfd, t->soffset, t->tssize - (t->soffset - t->toserver));
         t->soffset += size;
 
-        //we are done
+        // we are done
         if(t->soffset - t->toserver == t->tssize) {
           t->todo |= READSERVER;
           t->todo &= ~WRITESERVER;
@@ -593,7 +623,6 @@ void sendstuff() {
       // Reading from the server
       if(FD_ISSET(t->serverfd, &g_rg_fds)) {  
         g_fds[t->serverfd] = 'R';
-        // size = recv(t->serverfd, t->toclient, t->tcmax, 0);
         t->tcsize = recv(t->serverfd, t->toclient, t->tcmax, 0);
         t->coffset = t->toclient;
 
@@ -621,19 +650,15 @@ void sendstuff() {
       if(FD_ISSET(t->clientfd, &g_eg_fds) || FD_ISSET(t->serverfd, &g_eg_fds)) {  
         done(t, g_which);
       }
-
-      fflush(stdout);
     }
   }
 }
 
 void doselect() {  
   int
-    highest,
     hi, 
     i;  
 
-  static char buf[128];
   char toggle[5] = {0};
 
   struct client *c;
@@ -643,21 +668,12 @@ void doselect() {
   FD_ZERO(&g_wg_fds);
   FD_SET(g_proxyfd, &g_rg_fds);
 
-  // Stdin
-  FD_SET(0, &g_rg_fds);
-
   hi = g_proxyfd;
 
   for(i = 0;i < MAX;i++) {  
     if(g_dbase[i].active == TRUE) {
-      highest = i + 1;
-    }
-  }
+      memset(toggle, 32, 4);
 
-  for(i = 0;i < highest;i++) {  
-    // make it 4 spaces
-    memset(toggle, 32, 4);
-    if(g_dbase[i].active == TRUE) {
       c = &g_dbase[i];
 
       if(c->todo & READCLIENT) {
@@ -685,33 +701,27 @@ void doselect() {
       hi = GETMAX( GETMAX(c->clientfd, c->serverfd) , hi);
 
       // print the current state of affairs
-      printf("%2d:%s ", i, toggle);
-    } else {
-      printf(" ..%s ", toggle);
+      EMIT
+        TYPE, "status",
+        CONNECTION, i,
+        TEXT, toggle
+      END
     }
   }
-  printf("\n");
 
-  memset(g_fds, 0, SMALL);
+  memset(g_fds, 0, MAX);
 
   select(hi + 1, &g_rg_fds, &g_wg_fds, &g_eg_fds, 0);
-
-  if(FD_ISSET(0, &g_rg_fds)) {
-    read(0, buf, 128);
-  }
 }
 
 int main(int argc, char*argv[]) {   
-  socklen_t  addrlen;
-
   int 
     ret, 
-    port = 0, 
-    try = 0;
+    port = htons(8080);
 
   struct sockaddr addr;
-  struct sockaddr_in   proxy, *ptr;
-  struct hostent *gethostbyaddr();
+  struct sockaddr_in   proxy;
+  socklen_t addrlen = sizeof(addr);
 
   char *progname = argv[0];
 
@@ -723,32 +733,13 @@ int main(int argc, char*argv[]) {
   FD_ZERO(&g_eg_fds);
   FD_ZERO(&g_wg_fds);
 
-  g_flog = fopen("/dev/stdout", "w");
-
-  if(!g_flog) {
-    exit(0);
-  }
-
-  addr.sa_family = AF_INET;
-  strcpy(addr.sa_data, "somename");
   memset(g_dbase, 0, sizeof(g_dbase));
-  while(argc > 0) {
+
+  for(; argc > 0; argc--, argv++) {
     if(ISA("-p", "--port")) {
       if(--argc)  {
         port = htons(atoi(*++argv));
       }
-    }
-#ifdef _DEBUG
-    else if(ISA("-S", "--screen")) {
-      g_screen = 1;
-    } else if(ISA("-v", "--verbose")) {
-      g_logall = 1;
-    } else if(ISA("-F", "--fast")) {
-      g_fast = 1;
-    }
-#endif // _DEBUG
-    else if(ISA("-t", "--try")) {
-      try = 1;
     } else if(ISA("-a", "--absolute")) {
       if(--argc) {
         g_absolute = *++argv;
@@ -756,53 +747,62 @@ int main(int argc, char*argv[]) {
     } else if(ISA("-H", "--help")) {
       printf("%s\n", progname);
       printf("\t-p --port\tWhat part to run on\n");
-      printf("\t-t --try\tIncrementally try ports\n");
       printf("\t-a --absolute\tAbsolute address for proxying to\n");
-#ifdef _DEBUG
-      printf("\t-v --verbose\tVerbose logging\n");
-      printf("\t-S --screen\tScreen printing\n");
-      printf("\t-F --fast\tSkip over lots of helpful formatting tricks\n");
-#endif // _DEBUG
       exit(0);
     }
-
-    argv++;
-    if(argc)argc--;
-  }
-  if(!port) {
-    port = htons(8080);  //8080 is a default proxy port
   }
 
+  addr.sa_family = AF_INET;
+  strcpy(addr.sa_data, "somename");
   proxy.sin_family = AF_INET;
   proxy.sin_port = port;
   proxy.sin_addr.s_addr = INADDR_ANY;
   g_proxyfd = socket(PF_INET, SOCK_STREAM, 0);
 
-  ret = setsockopt(g_proxyfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger));
-  if(ret) {
-    perror("setsockopt");
+  if ( setsockopt(g_proxyfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger)) ) {
+    EMIT
+      TYPE, "error",
+      TEXT, "setsockopt"
+    END
   }
 
   while(bind(g_proxyfd, (struct sockaddr*)&proxy, sizeof(proxy)) < 0) {  
-    fprintf(stderr, ".");
+    sprintf(g_buf, "Failed to bind to port %d", ntohs(proxy.sin_port));
+    EMIT
+      TYPE, "info",
+      TEXT, g_buf
+    END
 
-    if(!try) {
-      usleep(100000);
-    } else {  
-      proxy.sin_port += htons(1);
-      fprintf(stderr, "Trying port %d...", ntohs(proxy.sin_port));
-    }
+    proxy.sin_port += htons(1);
+    sprintf(g_buf, "Trying port %d", ntohs(proxy.sin_port));
+
+    EMIT
+      TYPE, "info",
+      TEXT, g_buf
+    END
   }
 
-  addrlen = sizeof(addr);
-  ret = getsockname(g_proxyfd, &addr, &addrlen);
-  ptr = (struct sockaddr_in*)&addr;
-  listen(g_proxyfd, SMALL);
+  if ( getsockname(g_proxyfd, &addr, &addrlen) ) {
+    EMIT
+      TYPE, "error",
+      TEXT, "getsockname"
+    END
+  }
 
-  printf("Listening on port %d", ntohs(proxy.sin_port));
-  fflush(0);
+  if ( listen(g_proxyfd, MAX) ) {
+    EMIT
+      TYPE, "error",
+      TEXT, "listen"
+    END
+  }
 
-  // This is the main loop
+  sprintf(g_buf, "Listening on port %d", ntohs(proxy.sin_port));
+
+  EMIT
+    TYPE, "info",
+    TEXT, g_buf
+  END
+
   for(;;) {
     doselect();
 
@@ -813,5 +813,5 @@ int main(int argc, char*argv[]) {
     sendstuff();
   }
 
-  return(0);
+  exit(0);
 }

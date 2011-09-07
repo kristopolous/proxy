@@ -5,36 +5,55 @@ Yes, not for compression or caching, but for **debugging**.
 you can set an absolute address.  That is to say that all traffic going to port, say 85, should be forwarded 
 to port 80, after it's dumped to the screen of course.
 
-Here we see the HTTP Headers, quite clearly.
+## Output
+The proxy itself outputs in JSON messages: One per newline. Newlines in payloads are escaped. Nice, glossy UIs (or ugly obscene ones) are up to you.
 
-	 1 GET /favicon.ico HTTP/1.1
-	 1 Accept: */*
-	 1 Accept-Encoding: gzip, deflate
-	 1 User-Agent: Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.
-	 - 0)
-	 1 Host: 10.10.131.136:7790
-	 1 Connection: Keep-Alive
-	 1 Cookie: sess=9232fab8797f86fd473274cb66e3a923
-	 1 
-	 1 }
+## Format
+An example of some common output would look like this:
 
-That was the end of that chunk of data, called a packet, duh.
-After each chunk you can see how many connections are open and
-whether they are reading from the client, writing to the client
-or reading from the server or writing the server.
+`{"timestamp":1315359408.751000,"type":"payload","connection":0,"text":"HTTP/1.1 200 OK\r\nDate: Wed, 07 Sep 2011 01:09:36 GMT\r\nStatus: 200 OK\r\nConnection: keep-alive\r\nETag: fa147ca0-bb1b-012e-a5c1-704da2212453\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\nSet-Cookie: sess=3aa3477df123eb26c025b675bbfb8567; path=/; expires=Tue, 11-Oct-2011 18:29:36 GMT; HttpOnly\r\n\r\n"}`
 
-Connection 1 had read from the client and wrote to the server
+The fields are explained below
 
-	 0:rR    1:r  W 
-	 0:rR    1:rR   
+### { Timestamp: [ number ] }
+The Epoch time with millisecond precision as returned by ftime(2).
 
-Now connection 1 will read from the server and write to the client
+### { Type: [ "info", "status", "payload", "error", "close" ] }
+One of the following:
 
-	 1 HTTP/1.1 404 Not Found
-	 1 Date: Thu, 21 Jul 2011 23:44:15 GMT
-	 1 Status: 404 Not Found
-	 1 Connection: keep-alive
-	 1 Content-Type: text/html
-	 1 
-	 0:rR    1:r w  
-	 0:rR    1:rR   
+ * info : Overhead information about the proxy itself
+ * status : The current state of the connected socket
+ * payload : Data being sent over the wire
+ * error : An internal error that prevented a connection from happening.
+ * close : The connected socket is closed
+
+### { Connection: [ number ] }
+The proxy is of course, multi-plexed, serving multiple connections simultaneously.  These connections are indexed in order to keep track of them, this number is their index. 
+The master connection is "-1" and only shows up when bringing things up or down.
+
+### { Text: [ string ] }
+
+For 
+
+ * status : a number of flags ( see Flags )
+ * payload : the data that is transiting ( see Data Notes )
+ * error : a human readable description
+ * close : the empty string
+
+## Data Notes
+Binary is encoded as \uXX where XX refers to the encoded character.
+
+## Flags
+The flags are unnecessarily compact and overly confusing; but if you really want to know what they mean, pay close attention.
+
+ 1. All flags are 4 characters wide.
+ 2. The flags report on the state of transit from the server and the client
+ 3. Each character specifies a style of transit.
+
+The semantic meanings are as follows:
+
+ * Byte 0, value 'r', indicates that data has been read from the client (usually person with a web browser)
+ * Byte 1, value 'R', indicates that data has been read from the server (usually where Apache or IIS is living)
+ * Byte 2, value 'w', indicates that data is being written to the client (such as a 200 OK response as read from the server)
+ * Byte 3, value 'W', indicates that data is being written to the server (such as a GET / request from the client)
+
