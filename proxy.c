@@ -299,16 +299,25 @@ void handle_bp(int in) {
 
 char* copybytes(char*start, char*end) {
   char* copy;
-  if(end > start) {
-    copy = (char*)malloc(end - start + 1);
-    memcpy(copy, start, end - start);
-    copy[end - start] = 0;
-    return copy;
-  } else {
-    copy = (char*)malloc(1);
-    copy[0] = 0;
-    return copy;
+  copy = (char*)malloc(end - start + 1);
+  memcpy(copy, start, end - start);
+  copy[end - start] = 0;
+  return copy;
+}
+
+int my_atoi(char**ptr_in) {
+  int number = 0;
+  char *ptr = *ptr_in;
+
+  while(ptr++) {
+    if(*ptr < '0' || *ptr > '9') {
+      break;
+    }
+
+    number *= 10;
+    number += *ptr-'0';
   }
+  return number;
 }
 
 //
@@ -316,17 +325,13 @@ char* copybytes(char*start, char*end) {
 //
 void process(struct client*toprocess) {  
   char   
-    *req = 0, 
     *ptr, 
-    *tptr = 0, 
-    *doc, 
-    *beg, 
-    *end,
-    *reqtype;
-
-  ptr = toprocess->toserver;
-  // These are the default values
-  toprocess->port = 80;
+    *path_start, 
+    *location_start,
+    *host_start,
+    *payload_start = toprocess->toserver,
+    *payload_end = toprocess->toserver + toprocess->tssize,
+    *end;
 
   // The request is something like:
   // GET http://website/page HTTP/1.1 ...
@@ -334,143 +339,71 @@ void process(struct client*toprocess) {
   // GET /page HTTP/1.1 ...
   // This just copies the part GET << THIS>> HTTP/1.0 to req
 
-  if(g_absolute != 0) {
-    char *ptr;
-
+  if(g_absolute) {
     toprocess->host = (char*)malloc(strlen(g_absolute));
     memcpy(toprocess->host, g_absolute, strlen(g_absolute));
     for(ptr = toprocess->host;*ptr != ':';ptr++);
     ptr[0] = 0;
 
-    toprocess->port = 0;
-
-    while(ptr++) {
-      if(*ptr < '0' || *ptr>'9') {
-        break;
-      }
-
-      toprocess->port *= 10;
-      toprocess->port += *ptr-'0';
-    }
+    toprocess->port = my_atoi(&ptr);
   } else {  
-    // reqtype is either GET or PUT usually
-    reqtype = ptr;
+    ptr = payload_start;
 
-    // At the end of the GET or PUT, we put a \0 for string termination
-    while(ptr++) {  
-      if(*ptr == ' ') { 
-        // Copy the GET or PUT out and then null it
-        if(toprocess->reqtype) {
-          free(toprocess->reqtype);
-        }
+    // TYPE[ ]Request
+    for(; ptr[0] != ' '; ptr++);
 
-        toprocess->reqtype = malloc(ptr - reqtype + 1);
-        memcpy(toprocess->reqtype, reqtype, ptr - reqtype);
-        toprocess->reqtype[ptr - reqtype] = 0;
-
-        // Get the command out
-        tptr = beg = ptr + 1;
-
-        while(ptr++) {
-          if(*ptr == ' ') {
-            break;
-          }
-        }
-
-        end = ptr;
-        req = (char*)malloc(ptr - tptr + 1);
-        memcpy(req, tptr, ptr - tptr);
-        req[ptr - tptr] = 0;
-        break;
-      }
+    // Copy the GET or PUT out and then null it
+    if(toprocess->reqtype) {
+      free(toprocess->reqtype);
     }
 
-    // Now req should be the "http://website/page" part of the request
-    //Host is included (ie, http://blah)
-    if(req[0] != '/')  {  
-      if(req[4] == 's') {
-        // Look for https requests
-        tptr = req + 8;
-      } else {
-        tptr = req + 7;
-      }
-      // We forward the pointer past the http:// part
-      ptr = tptr;
+    toprocess->reqtype = copybytes(payload_start, ptr);
 
-      // Since http://host:port/something is valid
+    // Get the start of the location
+    ptr++;
+    location_start = ptr;
+
+    if(ptr[0] != '/')  {  
+
+      // We forward the pointer past the http:// part
+      if(ptr[4] == 's') {
+
+        // Look for https requests
+        ptr += 8;
+      } else {
+        ptr += 7;
+      }
+
+      host_start = ptr;
+
+      // PROTO://[host:port]/path
       while(ptr++) {
 
         // port
         if(*ptr == ':') {  
-          toprocess->port = 0;
-          toprocess->host = copybytes(tptr, ptr);
+          toprocess->host = copybytes(host_start, ptr);
 
-          // An atoi routine
-          while(ptr++) {
-            if(*ptr < '0' || *ptr > '9') {
-              break;
-            }
-
-            toprocess->port *= 10;
-            toprocess->port += *ptr - '0';
-          }
-
+          // This forwards the pointer
+          toprocess->port = my_atoi(&ptr);
           break;
         }
-        // We assume we are at the end of the request
+
+        // We assume we are at the end of the HOST
         if(*ptr == '/') {
-          toprocess->host = copybytes(tptr, ptr);
+          toprocess->host = copybytes(host_start, ptr);
+  
+          toprocess->port = 80;
           break;
         }
       }
 
-      tptr = ptr;
-      ptr = req + strlen(req);
-      doc = copybytes(ptr, tptr);
+      path_start = ptr;
 
       // This shifts the request to exclude the host and proto info in the GET part
-      memmove(beg + strlen(doc), end, toprocess->tssize - (end - toprocess->toserver) + 1);
-
-      memcpy(beg, doc, strlen(doc));
-      free(doc);
+      memmove(location_start, path_start, payload_end - path_start);
     }
+
   }
-
-  if(g_absolute == 0) {
-    //
-    // This part checks the "Host:" section of the HTTP request
-    //
-    // Really - if we get everything from above then why?
-    beg = (char*)g_strhost;
-    ptr = toprocess->toserver;
-
-    while(ptr++) {
-      if(*ptr == *beg) {
-        beg++;
-      } else {
-        beg = (char*)g_strhost;
-      }
-
-      if(*beg == 0) {  
-        ptr++;
-        tptr = ptr;
-
-        while(*ptr > ' ') {
-          ptr++;
-        }
-
-        if(!toprocess->host) {  
-          toprocess->host = copybytes(tptr, ptr);
-        }
-
-        break;
-      }
-    }
-  }
-
-  if(!req) {
-    free(req);
-  }  
 }
 
 
@@ -809,6 +742,14 @@ int main(int argc, char*argv[]) {
     TYPE, "info",
     TEXT, g_buf
   END
+
+  if(g_absolute) {
+    sprintf(g_buf, "Forwarding requests to %s", g_absolute);
+    EMIT
+      TYPE, "info",
+      TEXT, g_buf
+    END
+  }
 
   for(;;) {
     doselect();
