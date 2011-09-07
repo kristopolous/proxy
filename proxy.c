@@ -297,6 +297,20 @@ void handle_bp(int in) {
   done(g_forsig, 0);
 }
 
+char* copybytes(char*start, char*end) {
+  char* copy;
+  if(end > start) {
+    copy = (char*)malloc(end - start + 1);
+    memcpy(copy, start, end - start);
+    copy[end - start] = 0;
+    return copy;
+  } else {
+    copy = (char*)malloc(1);
+    copy[0] = 0;
+    return copy;
+  }
+}
+
 //
 // Doesn't do any socket stuff
 //
@@ -351,11 +365,11 @@ void process(struct client*toprocess) {
         }
 
         toprocess->reqtype = malloc(ptr - reqtype + 1);
-        memcpy(toprocess->reqtype, reqtype, ptr-reqtype);
-        toprocess->reqtype[ptr-reqtype] = 0;
+        memcpy(toprocess->reqtype, reqtype, ptr - reqtype);
+        toprocess->reqtype[ptr - reqtype] = 0;
 
         // Get the command out
-        tptr = beg = ptr+1;
+        tptr = beg = ptr + 1;
 
         while(ptr++) {
           if(*ptr == ' ') {
@@ -364,9 +378,9 @@ void process(struct client*toprocess) {
         }
 
         end = ptr;
-        req = (char*)malloc(ptr-tptr+1);
-        memcpy(req, tptr, ptr-tptr);
-        req[ptr-tptr] = 0;
+        req = (char*)malloc(ptr - tptr + 1);
+        memcpy(req, tptr, ptr - tptr);
+        req[ptr - tptr] = 0;
         break;
       }
     }
@@ -389,9 +403,7 @@ void process(struct client*toprocess) {
         // port
         if(*ptr == ':') {  
           toprocess->port = 0;
-          toprocess->host = (char*)malloc(ptr - tptr + 1);
-          memcpy(toprocess->host, tptr, ptr - tptr);
-          toprocess->host[ptr-tptr] = 0;
+          toprocess->host = copybytes(tptr, ptr);
 
           // An atoi routine
           while(ptr++) {
@@ -407,21 +419,18 @@ void process(struct client*toprocess) {
         }
         // We assume we are at the end of the request
         if(*ptr == '/') {
-          toprocess->host = (char*)malloc(ptr-tptr+1);
-          memcpy(toprocess->host, tptr, ptr-tptr);
-          toprocess->host[ptr-tptr] = 0;
+          toprocess->host = copybytes(tptr, ptr);
           break;
         }
       }
 
       tptr = ptr;
-      ptr = req+strlen(req);
-      doc = (char*)malloc(ptr-tptr+1);
-      memcpy(doc, tptr, ptr-tptr);
-      doc[ptr-tptr] = 0;
+      ptr = req + strlen(req);
+      doc = copybytes(ptr, tptr);
+
       // This shifts the request to exclude the host and proto info in the GET part
-      memmove(beg+strlen(doc), end, toprocess->tssize-(end-toprocess->toserver)+1);
-      // memset(beg+toprocess->tssize-(end-toprocess->toserver), 0, toprocess->tssize-(end-toprocess->toserver));
+      memmove(beg + strlen(doc), end, toprocess->tssize - (end - toprocess->toserver) + 1);
+
       memcpy(beg, doc, strlen(doc));
       free(doc);
     }
@@ -451,9 +460,7 @@ void process(struct client*toprocess) {
         }
 
         if(!toprocess->host) {  
-          toprocess->host = (char*)malloc(ptr-tptr+1);
-          memcpy(toprocess->host, tptr, ptr-tptr);
-          toprocess->host[ptr-tptr] = 0;
+          toprocess->host = copybytes(tptr, ptr);
         }
 
         break;
