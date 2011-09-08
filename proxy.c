@@ -41,13 +41,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "cjson/cJSON.h"
+#define LARGE 16384
+#define MAX   128
+#define HEX   "0123456789ABCDEF"
 
-#define LARGE  16384
-#define MAX  128
-
-#define EMIT emit(
-#define END ,_END);
+#define EMIT  emit(
+#define END   ,END);
 
 enum {
   FALSE, 
@@ -58,23 +57,22 @@ enum {
   TEXT, 
   CONNECTION,
   
-  _END
+  END
 };
 
-#define CHR(_size_)   (char*)malloc(sizeof(char)*(_size_))
+#define CHR(_size_)       (char*) malloc(sizeof(char)*(_size_))
 #define ISA(_s_, _l_)     ( ( !strcmp(*argv, _s_) ) || ( !strcmp(*argv, _l_) ) )
 #define GETMAX(_a_, _b_)  ( ( (_a_) > (_b_) ) ? (_a_) : (_b_) )
-#define NULLFREE(_a_)    if((_a_)) { free((_a_)); (_a_) = 0; }
+#define NULLFREE(_a_)     if((_a_)) { free((_a_)); (_a_) = 0; }
 
-#define READSERVER  0x01
-#define READCLIENT  0x02
-#define WRITESERVER  0x04
-#define WRITECLIENT  0x08
+#define READSERVER    0x01
+#define READCLIENT    0x02
+#define WRITESERVER   0x04
+#define WRITECLIENT   0x08
 
 struct client {
   char  
     *host,     //The host to connect to
-    *oldhost,   //The currently connected host
     
     *toclient,   //Response from host
     *toserver,   //What to send to the server
@@ -82,7 +80,6 @@ struct client {
     *coffset,   //Writing to the client
     *soffset,   //Writing to the server
 
-    processRequest, // Should we process a request
     active;    // Is the client active
 
   int
@@ -96,12 +93,11 @@ struct client {
 
     clientfd,   //File handle of client connected
     serverfd,   //File handle of server
-    proto,     //What protocol is in use
     port;    //What port of the host
 };
 
 char
-  g_buf[LARGE],
+  g_buf[LARGE * 4],
   *g_absolute = 0;
 
 const char  *g_strhost = "Host: ";
@@ -122,62 +118,40 @@ struct linger g_linger_t = { 1, 0 };
 void done(struct client*, int id);
 
 void emit(int firstarg, ...) {
-  cJSON *root = cJSON_CreateObject();  
-
   struct timeb tp;
   double ts;
+  int type;
 
   va_list ap;
-
-  char 
-    *string,
-    *output;
-
-  int 
-    ix,
-    len,
-    type;
 
   ftime(&tp);
   ts = tp.time * 1000 + tp.millitm;
 
-  cJSON_AddNumberToObject(root, "timestamp", ts / 1000);
+  printf("{\"ts\":%.03f", ts / 1000);
 
   va_start(ap, firstarg);
 
-  for(type = firstarg; type != _END; type = va_arg(ap, int)) {
+  for(type = firstarg; type != END; type = va_arg(ap, int)) {
 
     if(type == TYPE) {
-      cJSON_AddStringToObject(root, "type", va_arg(ap, char*));
+      printf(",\"type\":\"%s\"", va_arg(ap, char*));
     } else if(type == TEXT) {
-      cJSON_AddStringToObject(root, "text", va_arg(ap, char*));
+      printf(",\"text\":\"%s\"", va_arg(ap, char*));
     } else if(type == CONNECTION) {
-      cJSON_AddNumberToObject(root, "connection", va_arg(ap, int));
+      printf(",\"id\":%d", va_arg(ap, int));
     }
   }
 
   va_end(ap);
 
-  output = cJSON_PrintUnformatted(root);
-  printf("%s\n", output);
+  printf("}\n");
   fflush(0);
-
-  cJSON_Delete(root);
-  free(output);
-}
-
-ssize_t wrapwrite(int fd, const void *buf, size_t count) {
-  ssize_t ret;  
-
-  ret = write(fd, buf, count);
-
-  return(ret);
 }
 
 ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {  
   ssize_t ret;  
   int ix = 0;
-  char *binbuf, *binbufStart;
+  char *binbuf = g_buf;
 
   ret = recv(socket, buf, len, flags);
 
@@ -190,14 +164,33 @@ ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {
     return(ret);
   }
 
-  binbufStart = binbuf = (char*) malloc(ret * 4 + 1);
-
   for(ix = 0; ix < ret; ix++) {
-    if( (ptr[ix] < 32 || ptr[ix] > 127) && 
-        (ptr[ix] != '\n' && ptr[ix] != '\r' && ptr[ix] != '\t')
-      ) {
-      sprintf(binbuf, "\\u%02x", ptr[ix]);
-      binbuf += 4;
+    if(ptr[ix] < 32 || ptr[ix] > 127) {
+      binbuf[0] = '\\';
+
+      switch(ptr[ix]) {
+        case '\n':
+          binbuf[1] = 'n';
+          binbuf += 2;
+          break;
+
+        case '\r':
+          binbuf[1] = 'r';
+          binbuf += 2;
+          break;
+
+        case '\t':
+          binbuf[1] = 't';
+          binbuf += 2;
+          break;
+
+        default:
+          binbuf[1] = 'u';
+          binbuf[2] = HEX[ptr[ix] >> 4];
+          binbuf[3] = HEX[ptr[ix] & 0xf];
+          binbuf += 4;
+          break;
+      }
     } else {
       binbuf[0] = ptr[ix];
       binbuf += 1;
@@ -209,19 +202,17 @@ ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {
   EMIT
     TYPE, "payload",
     CONNECTION, which,
-    TEXT, binbufStart
+    TEXT, g_buf
   END
 
-  free(binbufStart);
   return(ret);
 }
 
 void closeAll(int in) {
   int ix;
-  struct client* pClient;
+  struct client* pClient = g_dbase;
 
-  for(ix = 0; ix < MAX; ix++) {
-    pClient = &g_dbase[ix];
+  for(ix = 0; ix < MAX; ix++, pClient++) {
 
     if(pClient->active) {
 
@@ -265,6 +256,11 @@ void done(struct client*cur, int id) {
       memset(cur->toclient, 0, cur->tcmax);
     }
 
+    if(cur->host) {
+      free(cur->host);
+      cur->host = 0;
+    }
+
     cur->active = FALSE;
     cur->tcsize = 0;
     cur->tssize = 0;
@@ -275,7 +271,6 @@ void done(struct client*cur, int id) {
     cur->soffset = cur->toserver;
 
     NULLFREE(cur->host);
-    NULLFREE(cur->oldhost);
 
     EMIT
       TYPE, "close",
@@ -306,7 +301,7 @@ int my_atoi(char**ptr_in) {
     }
 
     number *= 10;
-    number += *ptr-'0';
+    number += *ptr - '0';
   }
 
   return number;
@@ -319,6 +314,7 @@ void process(struct client*toprocess) {
     *path_start, 
     *location_start,
     *host_start,
+    *host_compare,
     *payload_start = toprocess->toserver,
     *payload_end = toprocess->toserver + toprocess->tssize,
     *end;
@@ -364,7 +360,7 @@ void process(struct client*toprocess) {
 
         // port
         if(*ptr == ':') {  
-          toprocess->host = copybytes(host_start, ptr);
+          host_compare = copybytes(host_start, ptr);
 
           // This forwards the pointer
           toprocess->port = my_atoi(&ptr);
@@ -373,23 +369,34 @@ void process(struct client*toprocess) {
 
         // We assume we are at the end of the HOST
         if(*ptr == '/') {
-          toprocess->host = copybytes(host_start, ptr);
+          host_compare = copybytes(host_start, ptr);
   
           toprocess->port = 80;
           break;
         }
       }
 
+      if(!toprocess->host) {
+        toprocess->host = host_compare;
+
+        relaysetup(toprocess);
+      } else if (strcmp(host_compare, toprocess->host)) {
+
+        free(toprocess->host);
+
+        toprocess->host = host_compare;
+
+        relaysetup(toprocess);
+      }
+
       path_start = ptr;
 
       // This shifts the request to exclude the host and proto info in the GET part
-      memmove(location_start, path_start, payload_end - path_start);
+      memmove(location_start, path_start, payload_end - path_start + 1);
+
+      toprocess->tssize = (payload_end - path_start) + (location_start - payload_start);
     }
-
   }
-
-  // Turn off the process flag
-  toprocess->processRequest = FALSE;
 }
 
 
@@ -415,10 +422,7 @@ void newconnection(int connectionID) {
   cur->tcmax = LARGE;
   cur->tsmax = LARGE;
   cur->todo |= READCLIENT;
-
-  // The first packet coming in from the
-  // client will probably be an http directive
-  cur->processRequest = TRUE;
+  cur->host = 0;
 
   // If memory has been allocated before
   if(cur->toserver) {
@@ -439,6 +443,14 @@ int relaysetup(struct client*t) {
   struct sockaddr_in  name;
   struct hostent *hp;
   int ret;
+
+  if (t->active) {
+    if(t->serverfd) {
+      shutdown(t->serverfd, SHUT_RDWR);
+      close(t->serverfd);
+    }
+    t->serverfd = 0;
+  }
 
   g_forsig = t;
 
@@ -512,22 +524,10 @@ void sendstuff() {
         if(t->tssize > 0) {
           t->todo |= WRITESERVER;
 
-          if(t->processRequest) {
-            process(t);
-          }
+          process(t);
 
-          // If the relay hasn't been set up (this is a first time
-          // connect) than do so now.
-          if(!t->serverfd) {
-            relaysetup(t);
-          }
         } else {
           done(t, which);
-
-          // If we are at the end of the request, then the next
-          // request will be an HTTP directive, so we set the
-          // processRequest to true
-          t->processRequest = TRUE;
         }
 
         // Make sure we write this entire payload to the server
@@ -539,7 +539,7 @@ void sendstuff() {
       // Writing to the server
       if(FD_ISSET(t->serverfd, &g_wg_fds)) {  
 
-        size = wrapwrite(t->serverfd, t->soffset, t->tssize - (t->soffset - t->toserver));
+        size = write(t->serverfd, t->soffset, t->tssize - (t->soffset - t->toserver));
         t->soffset += size;
 
         // we are done
@@ -564,7 +564,7 @@ void sendstuff() {
       }
 
       if(FD_ISSET(t->clientfd, &g_wg_fds)) {  
-        size = wrapwrite(t->clientfd, t->coffset, t->tcsize - (t->coffset - t->toclient));
+        size = write(t->clientfd, t->coffset, t->tcsize - (t->coffset - t->toclient));
         t->coffset += size;
 
         if(t->coffset - t->toclient == t->tcsize) {  

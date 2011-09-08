@@ -11,14 +11,14 @@ The proxy itself outputs in JSON messages: One per newline. Newlines in payloads
 ## Format
 An example of some common output would look like this:
 
-`{"timestamp":1315359408.751000,"type":"payload","connection":0,"text":"HTTP/1.1 200 OK\r\nDate: Wed, 07 Sep 2011 01:09:36 GMT\r\nStatus: 200 OK\r\nConnection: keep-alive\r\nETag: fa147ca0-bb1b-012e-a5c1-704da2212453\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\nSet-Cookie: sess=3aa3477df123eb26c025b675bbfb8567; path=/; expires=Tue, 11-Oct-2011 18:29:36 GMT; HttpOnly\r\n\r\n"}`
+    {"ts":1315359408.751000,"type":"payload","id":0,"text":"HTTP/1.1 200 OK\r\nDate: Wed, 07 Sep 2011 01:09:36 GMT\r\nStatus: 200 OK\r\nConnection: keep-alive\r\nETag: fa147ca0-bb1b-012e-a5c1-704da2212453\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\nSet-Cookie: sess=3aa3477df123eb26c025b675bbfb8567; path=/; expires=Tue, 11-Oct-2011 18:29:36 GMT; HttpOnly\r\n\r\n"}
 
 The fields are explained below
 
-### { Timestamp: [ number ] }
+### { ts: [ number ] }
 The Epoch time with millisecond precision as returned by ftime(2).
 
-### { Type: [ "info", "status", "payload", "error", "close" ] }
+### { type: [ "info", "status", "payload", "error", "close" ] }
 One of the following:
 
  * info : Overhead information about the proxy itself
@@ -27,11 +27,11 @@ One of the following:
  * error : An internal error that prevented a connection from happening.
  * close : The connected socket is closed
 
-### { Connection: [ number ] }
+### { id: [ number ] }
 The proxy is of course, multi-plexed, serving multiple connections simultaneously.  These connections are indexed in order to keep track of them, this number is their index. 
 The master connection is "-1" and only shows up when bringing things up or down.
 
-### { Text: [ string ] }
+### { text: [ string ] }
 
 For 
 
