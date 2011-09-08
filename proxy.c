@@ -46,7 +46,7 @@
 #define HEX   "0123456789ABCDEF"
 
 #define EMIT  emit(
-#define END   ,END);
+#define END   ,_END);
 
 enum {
   FALSE, 
@@ -57,7 +57,7 @@ enum {
   TEXT, 
   CONNECTION,
   
-  END
+  _END
 };
 
 #define CHR(_size_)       (char*) malloc(sizeof(char)*(_size_))
@@ -131,7 +131,7 @@ void emit(int firstarg, ...) {
 
   va_start(ap, firstarg);
 
-  for(type = firstarg; type != END; type = va_arg(ap, int)) {
+  for(type = firstarg; type != _END; type = va_arg(ap, int)) {
 
     if(type == TYPE) {
       printf(",\"type\":\"%s\"", va_arg(ap, char*));
@@ -158,10 +158,6 @@ ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {
   char *ptr = (char*)buf;
   if(ret < len && ret > 0) {
     ptr[ret] = 0;
-  }
-
-  if(ret < 1) {
-    return(ret);
   }
 
   for(ix = 0; ix < ret; ix++) {
@@ -285,21 +281,20 @@ void handle_bp(int in) {
 
 char* copybytes(char*start, char*end) {
   char* copy;
+
   copy = (char*)malloc(end - start + 1);
   memcpy(copy, start, end - start);
   copy[end - start] = 0;
+
   return copy;
 }
 
 int my_atoi(char**ptr_in) {
   int number = 0;
-  char *ptr = *ptr_in;
+  char *ptr;
 
-  while(ptr++) {
-    if(*ptr < '0' || *ptr > '9') {
-      break;
-    }
-
+  for(ptr = *ptr_in + 1; *ptr >= '0' && *ptr <= '9'; ptr++) {
+    printf("%c", *ptr);
     number *= 10;
     number += *ptr - '0';
   }
@@ -326,12 +321,14 @@ void process(struct client*toprocess) {
   // This just copies the part GET << THIS>> HTTP/1.0 to req
 
   if(g_absolute) {
-    toprocess->host = (char*)malloc(strlen(g_absolute));
-    memcpy(toprocess->host, g_absolute, strlen(g_absolute));
-    for(ptr = toprocess->host;*ptr != ':';ptr++);
-    ptr[0] = 0;
 
-    toprocess->port = my_atoi(&ptr);
+    if(!toprocess->host) {
+      for(ptr = g_absolute;*ptr != ':';ptr++);
+      ptr[0] = 0;
+      toprocess->host = copybytes(g_absolute, ptr);
+      toprocess->port = my_atoi(&ptr);
+      relaysetup(toprocess);
+    }
   } else {  
     ptr = payload_start;
 
@@ -459,9 +456,10 @@ int relaysetup(struct client*t) {
 
   // Couldn't resolve
   if(!hp) {
+    sprintf(g_buf, "Couldn't resolve host %s", t->host);
     EMIT
       TYPE, "error",
-      TEXT, "Couldn't resolve host!"
+      TEXT, g_buf
     END
 
     return(0);  // This is not a stupendous response
@@ -490,6 +488,12 @@ int relaysetup(struct client*t) {
       TEXT, "connect"
     END
   }
+
+  sprintf(g_buf,"Connecting to %s:%d", t->host, t->port);
+  EMIT
+    TYPE, "info",
+    TEXT, g_buf
+  END
 
   fcntl(t->serverfd, F_SETFL, O_NONBLOCK);
 
