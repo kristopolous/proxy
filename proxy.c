@@ -22,17 +22,10 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <arpa/inet.h>
-
-#include <netinet/in.h>
-
-#include <sys/stat.h>
 #include <sys/timeb.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 
 #include <fcntl.h>
-#include <langinfo.h>
 #include <netdb.h>
 #include <signal.h>
 #include <string.h>
@@ -115,8 +108,6 @@ struct client
 
 struct linger g_linger_t = { 1, 0 };
 
-void done(struct client*, int id);
-
 void emit(int firstarg, ...) {
   struct timeb tp;
   double ts;
@@ -149,13 +140,14 @@ void emit(int firstarg, ...) {
 }
 
 ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {  
-  ssize_t ret;  
   int ix = 0;
-  char *binbuf = g_buf;
 
-  ret = recv(socket, buf, len, flags);
+  char 
+    *binbuf = g_buf,
+    *ptr = (char*)buf;
 
-  char *ptr = (char*)buf;
+  ssize_t ret = recv(socket, buf, len, flags);
+
   if(ret < len && ret > 0) {
     ptr[ret] = 0;
   }
@@ -204,34 +196,6 @@ ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {
   return(ret);
 }
 
-void closeAll(int in) {
-  int ix;
-  struct client* pClient = g_dbase;
-
-  for(ix = 0; ix < MAX; ix++, pClient++) {
-
-    if(pClient->active) {
-
-      EMIT
-        TYPE, "shutdown",
-        CONNECTION, ix
-      END
-
-      done(pClient, ix);
-    }
-  }
-
-  EMIT
-    TYPE, "shutdown",
-    CONNECTION, -1
-  END
-
-  shutdown(g_proxyfd, SHUT_RDWR);
-  close(g_proxyfd);
-
-  exit(0);
-}
-
 void done(struct client*cur, int id) {
   if (cur->active) {
     if(cur->clientfd) {
@@ -275,6 +239,35 @@ void done(struct client*cur, int id) {
   }
 }
 
+
+void closeAll(int in) {
+  int ix;
+  struct client* pClient = g_dbase;
+
+  for(ix = 0; ix < MAX; ix++, pClient++) {
+
+    if(pClient->active) {
+
+      EMIT
+        TYPE, "shutdown",
+        CONNECTION, ix
+      END
+
+      done(pClient, ix);
+    }
+  }
+
+  EMIT
+    TYPE, "shutdown",
+    CONNECTION, -1
+  END
+
+  shutdown(g_proxyfd, SHUT_RDWR);
+  close(g_proxyfd);
+
+  exit(0);
+}
+
 void handle_bp(int in) {
   done(g_forsig, 0);
 }
@@ -302,6 +295,78 @@ int my_atoi(char**ptr_in) {
   return number;
 }
 
+int relaysetup(struct client*t) {
+  struct sockaddr_in  name;
+  struct hostent *hp;
+  int ret;
+
+  if (t->active) {
+    if(t->serverfd) {
+      shutdown(t->serverfd, SHUT_RDWR);
+      close(t->serverfd);
+    }
+
+    t->serverfd = 0;
+  }
+
+  g_forsig = t;
+
+  // We don't have an active connection to the server yet
+  hp = gethostbyname(t->host);
+
+  // Couldn't resolve
+  if(!hp) {
+    sprintf(g_buf, "Couldn't resolve host %s", t->host);
+    EMIT
+      TYPE, "error",
+      TEXT, g_buf
+    END
+
+    return(0);  // This is not a stupendous response
+  }
+
+  t->serverfd = socket(AF_INET, SOCK_STREAM, 0);
+
+  ret = setsockopt(t->serverfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger));
+  if(ret) {
+
+    EMIT
+      TYPE, "error",
+      TEXT, "setsockopt"
+    END
+  }
+
+  name.sin_family = AF_INET;
+  name.sin_port = htons(t->port);
+  memcpy(&name.sin_addr.s_addr, hp->h_addr, hp->h_length);
+  ret = connect(t->serverfd, (const struct sockaddr*)&name, sizeof(name));
+
+  if(ret) {
+
+    EMIT
+      TYPE, "error",
+      TEXT, "connect"
+    END
+  }
+
+  sprintf(g_buf,"Connecting to %s:%d", t->host, t->port);
+  EMIT
+    TYPE, "info",
+    TEXT, g_buf
+  END
+
+  fcntl(t->serverfd, F_SETFL, O_NONBLOCK);
+
+  if(!t->toclient) {
+    t->coffset = t->toclient = CHR(t->tcmax);
+  }
+
+  t->todo |= WRITESERVER;
+
+  return(1);
+}
+
+
 // Parse a HTTP request
 void process(struct client*toprocess) {  
   char   
@@ -309,10 +374,9 @@ void process(struct client*toprocess) {
     *path_start, 
     *location_start,
     *host_start,
-    *host_compare,
+    *host_compare = 0,
     *payload_start = toprocess->toserver,
-    *payload_end = toprocess->toserver + toprocess->tssize,
-    *end;
+    *payload_end = toprocess->toserver + toprocess->tssize;
 
   // The request is something like:
   // GET http://website/page HTTP/1.1 ...
@@ -436,83 +500,12 @@ void newconnection(int connectionID) {
   return;
 }
 
-int relaysetup(struct client*t) {
-  struct sockaddr_in  name;
-  struct hostent *hp;
-  int ret;
-
-  if (t->active) {
-    if(t->serverfd) {
-      shutdown(t->serverfd, SHUT_RDWR);
-      close(t->serverfd);
-    }
-    t->serverfd = 0;
-  }
-
-  g_forsig = t;
-
-  // We don't have an active connection to the server yet
-  hp = gethostbyname(t->host);
-
-  // Couldn't resolve
-  if(!hp) {
-    sprintf(g_buf, "Couldn't resolve host %s", t->host);
-    EMIT
-      TYPE, "error",
-      TEXT, g_buf
-    END
-
-    return(0);  // This is not a stupendous response
-  }
-
-  t->serverfd = socket(AF_INET, SOCK_STREAM, 0);
-
-  ret = setsockopt(t->serverfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger));
-  if(ret) {
-
-    EMIT
-      TYPE, "error",
-      TEXT, "setsockopt"
-    END
-  }
-
-  name.sin_family = AF_INET;
-  name.sin_port = htons(t->port);
-  memcpy(&name.sin_addr.s_addr, hp->h_addr, hp->h_length);
-  ret = connect(t->serverfd, (const struct sockaddr*)&name, sizeof(name));
-
-  if(ret) {
-
-    EMIT
-      TYPE, "error",
-      TEXT, "connect"
-    END
-  }
-
-  sprintf(g_buf,"Connecting to %s:%d", t->host, t->port);
-  EMIT
-    TYPE, "info",
-    TEXT, g_buf
-  END
-
-  fcntl(t->serverfd, F_SETFL, O_NONBLOCK);
-
-  if(!t->toclient) {
-    t->coffset = t->toclient = CHR(t->tcmax);
-  }
-
-  t->todo |= WRITESERVER;
-
-  return(1);
-}
-
 // Some things can be enqueued
 void sendstuff() {  
 
   int 
     which,
-    size,
-    tsize;
+    size;
 
   struct client*t;
 
@@ -646,9 +639,7 @@ void doselect() {
 }
 
 int main(int argc, char*argv[]) {   
-  int 
-    ret, 
-    port = htons(8080);
+  int port = htons(8080);
 
   struct sockaddr addr;
   struct sockaddr_in   proxy;

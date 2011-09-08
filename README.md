@@ -1,5 +1,5 @@
 # A debugging web proxy
-Yes, not for compression or caching, but for **debugging**.
+Yes, not for compression, not for caching, but for **debugging**.
 
 ## It can work transparently.
 you can set an absolute address.  That is to say that all traffic going to port, say 85, should be forwarded 
