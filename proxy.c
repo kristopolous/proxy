@@ -61,7 +61,10 @@ enum {
   _END
 };
 
-#define CHR(sz)   (char*)malloc(sizeof(char)*(sz))
+#define CHR(_size_)   (char*)malloc(sizeof(char)*(_size_))
+#define ISA(_s_, _l_)     ( ( !strcmp(*argv, _s_) ) || ( !strcmp(*argv, _l_) ) )
+#define GETMAX(_a_, _b_)  ( ( (_a_) > (_b_) ) ? (_a_) : (_b_) )
+#define NULLFREE(_a_)    if((_a_)) { free((_a_)); (_a_) = 0; }
 
 #define READSERVER  0x01
 #define READCLIENT  0x02
@@ -70,7 +73,6 @@ enum {
 
 struct client {
   char  
-    *reqtype,
     *host,     //The host to connect to
     *oldhost,   //The currently connected host
     
@@ -80,7 +82,8 @@ struct client {
     *coffset,   //Writing to the client
     *soffset,   //Writing to the server
 
-    active;    //Is the client active
+    processRequest, // Should we process a request
+    active;    // Is the client active
 
   int
     tcsize,   //To client in use size
@@ -97,21 +100,13 @@ struct client {
     port;    //What port of the host
 };
 
-#define ISA(_s_, _l_)     ( ( !strcmp(*argv, _s_) ) || ( !strcmp(*argv, _l_) ) )
-#define GETMAX(_a_, _b_)  ( ( (_a_) > (_b_) ) ? (_a_) : (_b_) )
-#define NULLFREE(_a_)    if((_a_)) { free((_a_)); (_a_) = 0; }
-
 char
   g_buf[LARGE],
-  *g_absolute = 0,
-  g_fds[MAX];
+  *g_absolute = 0;
 
 const char  *g_strhost = "Host: ";
 
-int 
-  g_clientsize = 0, 
-  g_proxyfd,
-  g_which;
+int g_proxyfd;
 
 fd_set  
   g_rg_fds, 
@@ -127,7 +122,7 @@ struct linger g_linger_t = { 1, 0 };
 void done(struct client*, int id);
 
 void emit(int firstarg, ...) {
-	cJSON *root = cJSON_CreateObject();	
+  cJSON *root = cJSON_CreateObject();  
 
   struct timeb tp;
   double ts;
@@ -171,7 +166,7 @@ void emit(int firstarg, ...) {
   free(output);
 }
 
-ssize_t wrapwrite(int fd, const void*buf, size_t count) {
+ssize_t wrapwrite(int fd, const void *buf, size_t count) {
   ssize_t ret;  
 
   ret = write(fd, buf, count);
@@ -179,12 +174,12 @@ ssize_t wrapwrite(int fd, const void*buf, size_t count) {
   return(ret);
 }
 
-ssize_t wraprecv(int s, void *buf, size_t len, int flags) {  
+ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {  
   ssize_t ret;  
   int ix = 0;
   char *binbuf, *binbufStart;
 
-  ret = recv(s, buf, len, flags);
+  ret = recv(socket, buf, len, flags);
 
   char *ptr = (char*)buf;
   if(ret < len && ret > 0) {
@@ -213,16 +208,13 @@ ssize_t wraprecv(int s, void *buf, size_t len, int flags) {
 
   EMIT
     TYPE, "payload",
-    CONNECTION, g_which,
+    CONNECTION, which,
     TEXT, binbufStart
   END
 
   free(binbufStart);
   return(ret);
 }
-
-#define write  wrapwrite
-#define recv  wraprecv
 
 void closeAll(int in) {
   int ix;
@@ -284,7 +276,6 @@ void done(struct client*cur, int id) {
 
     NULLFREE(cur->host);
     NULLFREE(cur->oldhost);
-    NULLFREE(cur->reqtype);
 
     EMIT
       TYPE, "close",
@@ -317,12 +308,11 @@ int my_atoi(char**ptr_in) {
     number *= 10;
     number += *ptr-'0';
   }
+
   return number;
 }
 
-//
-// Doesn't do any socket stuff
-//
+// Parse a HTTP request
 void process(struct client*toprocess) {  
   char   
     *ptr, 
@@ -351,13 +341,6 @@ void process(struct client*toprocess) {
 
     // TYPE[ ]Request
     for(; ptr[0] != ' '; ptr++);
-
-    // Copy the GET or PUT out and then null it
-    if(toprocess->reqtype) {
-      free(toprocess->reqtype);
-    }
-
-    toprocess->reqtype = copybytes(payload_start, ptr);
 
     // Get the start of the location
     ptr++;
@@ -404,41 +387,50 @@ void process(struct client*toprocess) {
     }
 
   }
+
+  // Turn off the process flag
+  toprocess->processRequest = FALSE;
 }
 
 
 // Associates new connection with a database entry
-void newconnection(int c) {  
-  socklen_t addrlen; 
+void newconnection(int connectionID) {  
   struct sockaddr addr;
+  socklen_t addrlen = sizeof(addr);
   struct client*cur;
-  int g_which;
+  int which;
 
-  getpeername(c, &addr, &addrlen);
+  getpeername(connectionID, &addr, &addrlen);
+  fcntl(connectionID, F_SETFL, O_NONBLOCK);
 
-  for(g_which = 0;g_which < MAX;g_which++) {  
-    if(g_dbase[g_which].active == FALSE) {
-      break;
-    }
-  }
+  for(
+    which = 0;
+    (which < MAX && !g_dbase[which].active == FALSE);
+    which++
+  );
 
-  cur = &g_dbase[g_which];
+  cur = &g_dbase[which];
   cur->active = TRUE;
-  cur->clientfd = c;
+  cur->clientfd = connectionID;
   cur->tcmax = LARGE;
   cur->tsmax = LARGE;
   cur->todo |= READCLIENT;
 
+  // The first packet coming in from the
+  // client will probably be an http directive
+  cur->processRequest = TRUE;
+
   // If memory has been allocated before
   if(cur->toserver) {
+
     // Just zero it
     memset(cur->toserver, 0, cur->tsmax);
+
   } else {
+
     // If not, than malloc
     cur->toserver = CHR(cur->tsmax);
   }
-
-  fcntl(c, F_SETFL, O_NONBLOCK);
 
   return;
 }
@@ -454,13 +446,13 @@ int relaysetup(struct client*t) {
   hp = gethostbyname(t->host);
 
   // Couldn't resolve
-  if(!hp)  {
+  if(!hp) {
     EMIT
       TYPE, "error",
       TEXT, "Couldn't resolve host!"
     END
 
-    return(0);  //This is not a stupendous response
+    return(0);  // This is not a stupendous response
   }
 
   t->serverfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -502,55 +494,52 @@ int relaysetup(struct client*t) {
 void sendstuff() {  
 
   int 
+    which,
     size,
     tsize;
 
   struct client*t;
 
-  for(g_which = 0;g_which < MAX;g_which++) {  
-    if(g_dbase[g_which].active == TRUE) {
-      t = &g_dbase[g_which];
+  for(which = 0;which < MAX;which++) {  
+    if(g_dbase[which].active == TRUE) {
+      t = &g_dbase[which];
       
       // Reading from the client
       if(FD_ISSET(t->clientfd, &g_rg_fds)) {
-        size = recv(t->clientfd, t->toserver, t->tsmax, 0);
-        g_fds[t->clientfd] = 'r';
-        
-        if(size == 0) {
-          done(t, g_which);
-        }
+        t->tssize = wraprecv(t->clientfd, t->toserver, t->tsmax, 0, which);
+        t->soffset = t->toserver;
 
-        while(size > 0) {  
+        if(t->tssize > 0) {
           t->todo |= WRITESERVER;
 
-          if(t->tsmax - size < 10) {
-            t->toserver = realloc(t->toserver, t->tsmax << 1);
-            memset(t->toserver + t->tsmax, 0, t->tsmax);
-            t->tsmax <<= 1;
+          if(t->processRequest) {
+            process(t);
           }
 
-          tsize = recv(t->clientfd, t->toserver + size, t->tsmax - size, 0);
-
-          if(tsize < 1) {
-            break;
-          } else {
-            size += tsize;
+          // If the relay hasn't been set up (this is a first time
+          // connect) than do so now.
+          if(!t->serverfd) {
+            relaysetup(t);
           }
+        } else {
+          done(t, which);
+
+          // If we are at the end of the request, then the next
+          // request will be an HTTP directive, so we set the
+          // processRequest to true
+          t->processRequest = TRUE;
         }
 
-        t->tssize = size;
-        t->soffset = t->toserver;
-        process(t);
-
-        if(!t->serverfd) {
-          relaysetup(t);
-        }
+        // Make sure we write this entire payload to the server
+        // before we try to read any more information from the 
+        // client
+        t->todo &= ~READCLIENT;
       }
+
       // Writing to the server
       if(FD_ISSET(t->serverfd, &g_wg_fds)) {  
 
-        g_fds[t->serverfd] = 'W';
-        size = write(t->serverfd, t->soffset, t->tssize - (t->soffset - t->toserver));
+        size = wrapwrite(t->serverfd, t->soffset, t->tssize - (t->soffset - t->toserver));
         t->soffset += size;
 
         // we are done
@@ -562,25 +551,23 @@ void sendstuff() {
 
       // Reading from the server
       if(FD_ISSET(t->serverfd, &g_rg_fds)) {  
-        g_fds[t->serverfd] = 'R';
-        t->tcsize = recv(t->serverfd, t->toclient, t->tcmax, 0);
+        t->tcsize = wraprecv(t->serverfd, t->toclient, t->tcmax, 0, which);
         t->coffset = t->toclient;
 
-        if(t->tcsize>0) {
+        if(t->tcsize > 0) {
           t->todo |= WRITECLIENT;
         } else {
-          done(t, g_which);
+          done(t, which);
         }
 
         t->todo &= ~READSERVER;
       }
 
       if(FD_ISSET(t->clientfd, &g_wg_fds)) {  
-        size = write(t->clientfd, t->coffset, t->tcsize-(t->coffset-t->toclient));
-        g_fds[t->clientfd] = 'w';
+        size = wrapwrite(t->clientfd, t->coffset, t->tcsize - (t->coffset - t->toclient));
         t->coffset += size;
 
-        if(t->tcsize == t->coffset-t->toclient) {  
+        if(t->coffset - t->toclient == t->tcsize) {  
           t->todo |= READCLIENT;
           t->todo &= ~WRITECLIENT;
           t->todo |= READSERVER;
@@ -588,7 +575,7 @@ void sendstuff() {
       }
       
       if(FD_ISSET(t->clientfd, &g_eg_fds) || FD_ISSET(t->serverfd, &g_eg_fds)) {  
-        done(t, g_which);
+        done(t, which);
       }
     }
   }
@@ -596,49 +583,51 @@ void sendstuff() {
 
 void doselect() {  
   int
-    hi, 
+    highestID, 
     i;  
 
   char toggle[5] = {0};
 
-  struct client *c;
+  struct client *pClient = g_dbase;
 
   FD_ZERO(&g_rg_fds);
   FD_ZERO(&g_eg_fds);
   FD_ZERO(&g_wg_fds);
   FD_SET(g_proxyfd, &g_rg_fds);
 
-  hi = g_proxyfd;
+  highestID = g_proxyfd;
 
-  for(i = 0;i < MAX;i++) {  
-    if(g_dbase[i].active == TRUE) {
+  for(i = 0;i < MAX; i++, pClient++) {  
+    if(pClient->active == TRUE) {
       memset(toggle, 32, 4);
 
-      c = &g_dbase[i];
-
-      if(c->todo & READCLIENT) {
-        FD_SET(c->clientfd, &g_rg_fds);
+      if(pClient->todo & READCLIENT) {
+        FD_SET(pClient->clientfd, &g_rg_fds);
         toggle[0] = 'r';
       }
 
-      if(c->todo & READSERVER) {
-        FD_SET(c->serverfd, &g_rg_fds);
+      if(pClient->todo & READSERVER) {
+        FD_SET(pClient->serverfd, &g_rg_fds);
         toggle[1] = 'R';
       }
 
-      if(c->todo & WRITECLIENT) {
-        FD_SET(c->clientfd, &g_wg_fds);
+      if(pClient->todo & WRITECLIENT) {
+        FD_SET(pClient->clientfd, &g_wg_fds);
         toggle[2] = 'w';
       }
 
-      if(c->todo & WRITESERVER)  {
-        FD_SET(c->serverfd, &g_wg_fds);
+      if(pClient->todo & WRITESERVER)  {
+        FD_SET(pClient->serverfd, &g_wg_fds);
         toggle[3] = 'W';
       }
 
-      FD_SET(c->serverfd, &g_eg_fds);
-      FD_SET(c->clientfd, &g_eg_fds);
-      hi = GETMAX( GETMAX(c->clientfd, c->serverfd) , hi);
+      FD_SET(pClient->serverfd, &g_eg_fds);
+      FD_SET(pClient->clientfd, &g_eg_fds);
+
+      highestID = GETMAX( 
+        GETMAX(pClient->clientfd, pClient->serverfd), 
+        highestID
+      );
 
       // print the current state of affairs
       EMIT
@@ -649,9 +638,7 @@ void doselect() {
     }
   }
 
-  memset(g_fds, 0, MAX);
-
-  select(hi + 1, &g_rg_fds, &g_wg_fds, &g_eg_fds, 0);
+  select(highestID + 1, &g_rg_fds, &g_wg_fds, &g_eg_fds, 0);
 }
 
 int main(int argc, char*argv[]) {   
