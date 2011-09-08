@@ -11,7 +11,14 @@ The proxy itself outputs in JSON messages: One per newline. Newlines in payloads
 ## Format
 An example of some common output would look like this:
 
-    {"ts":1315359408.751000,"type":"payload","id":0,"text":"HTTP/1.1 200 OK\r\nDate: Wed, 07 Sep 2011 01:09:36 GMT\r\nStatus: 200 OK\r\nConnection: keep-alive\r\nETag: fa147ca0-bb1b-012e-a5c1-704da2212453\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\nSet-Cookie: sess=3aa3477df123eb26c025b675bbfb8567; path=/; expires=Tue, 11-Oct-2011 18:29:36 GMT; HttpOnly\r\n\r\n"}
+    {"ts":1315359408.751000,"type":"payload","id":0,"
+    text":"HTTP/1.1 200 OK\r\nDate: Wed, 07 Sep 2011 
+    01:09:36 GMT\r\nStatus: 200 OK\r\nConnection: kee
+    p-alive\r\nETag: fa147ca0-bb1b-012e-a5c1-704da221
+    2453\r\nTransfer-Encoding: chunked\r\nContent-Typ
+    e: text/plain\r\nSet-Cookie: sess=3aa3477df123eb2
+    6c025b675bbfb8567; path=/; expires=Tue, 11-Oct-20
+    11 18:29:36 GMT; HttpOnly\r\n\r\n"}
 
 The fields are explained below
 
