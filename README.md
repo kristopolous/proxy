@@ -23,7 +23,7 @@ An example of some common output would look like this:
 The fields are explained below
 
 ### { ts: [ number ] }
-The Epoch time with millisecond precision as returned by ftime(2).
+The Epoch time with microsecond precision as returned by gettimeofday(2).
 
 ### { type: [ "info", "status", "payload", "error", "close" ] }
 One of the following:

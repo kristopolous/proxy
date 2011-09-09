@@ -22,7 +22,13 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <sys/timeb.h>
+#include <errno.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
+#include <sys/time.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 
 #include <fcntl.h>
@@ -40,6 +46,8 @@
 
 #define EMIT  emit(
 #define END   ,_END);
+
+extern int errno;
 
 enum {
   FALSE, 
@@ -65,33 +73,34 @@ enum {
 
 struct client {
   char  
-    *host,     //The host to connect to
+    *host,      // The host to connect to
     
-    *toclient,   //Response from host
-    *toserver,   //What to send to the server
+    *toclient,  // Response from host
+    *toserver,  // What to send to the server
 
-    *coffset,   //Writing to the client
-    *soffset,   //Writing to the server
+    *coffset,   // Writing to the client
+    *soffset,   // Writing to the server
 
-    active;    // Is the client active
+    active;     // Is the client active
 
   int
-    tcsize,   //To client in use size
-    tssize,   //To server in use size
+    tcsize,     // To client in use size
+    tssize,     // To server in use size
 
-    tcmax,     //Buffer size
-    tsmax,     //Buffer size
-  
-    todo,     //What to do
+    todo,       // What to do
 
-    clientfd,   //File handle of client connected
-    serverfd,   //File handle of server
-    port;    //What port of the host
+    clientfd,   // File handle of client connected
+    serverfd,   // File handle of server
+
+    port;       // What port of the host
 };
 
-char
-  g_buf[LARGE * 4],
-  *g_absolute = 0;
+struct {
+  char*host;
+  int port;
+} g_absolute;
+
+char g_buf[LARGE * 4];
 
 const char  *g_strhost = "Host: ";
 
@@ -109,16 +118,14 @@ struct client
 struct linger g_linger_t = { 1, 0 };
 
 void emit(int firstarg, ...) {
-  struct timeb tp;
-  double ts;
+  struct timeval tp;
   int type;
 
   va_list ap;
 
-  ftime(&tp);
-  ts = tp.time * 1000 + tp.millitm;
+  gettimeofday(&tp, 0);
 
-  printf("{\"ts\":%.03f", ts / 1000);
+  printf("{\"ts\":%d.%06d", (int) tp.tv_sec, (int) tp.tv_usec);
 
   va_start(ap, firstarg);
 
@@ -153,10 +160,20 @@ ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {
   }
 
   for(ix = 0; ix < ret; ix++) {
-    if(ptr[ix] < 32 || ptr[ix] > 127) {
+    if(ptr[ix] < 32 || ptr[ix] == '"' || ptr[ix] == '\\') {
       binbuf[0] = '\\';
 
       switch(ptr[ix]) {
+        case '\\':
+          binbuf[1] = '\\';
+          binbuf += 2;
+          break;
+
+        case '"':
+          binbuf[1] = '"';
+          binbuf += 2;
+          break;
+
         case '\n':
           binbuf[1] = 'n';
           binbuf += 2;
@@ -208,29 +225,11 @@ void done(struct client*cur, int id) {
       close(cur->serverfd);
     }
 
-    if(cur->toserver)  {
-      memset(cur->toserver, 0, cur->tsmax);
-    }  
-
-    if(cur->toclient) {
-      memset(cur->toclient, 0, cur->tcmax);
-    }
-
-    if(cur->host) {
-      free(cur->host);
-      cur->host = 0;
-    }
-
-    cur->active = FALSE;
-    cur->tcsize = 0;
-    cur->tssize = 0;
-    cur->todo = 0;
-    cur->clientfd = 0;
-    cur->serverfd = 0;
-    cur->coffset = cur->toclient;
-    cur->soffset = cur->toserver;
-
+    NULLFREE(cur->toserver);
+    NULLFREE(cur->toclient);
     NULLFREE(cur->host);
+
+    memset(cur, 0, sizeof(struct client));
 
     EMIT
       TYPE, "close",
@@ -287,7 +286,6 @@ int my_atoi(char**ptr_in) {
   char *ptr;
 
   for(ptr = *ptr_in + 1; *ptr >= '0' && *ptr <= '9'; ptr++) {
-    printf("%c", *ptr);
     number *= 10;
     number += *ptr - '0';
   }
@@ -295,13 +293,39 @@ int my_atoi(char**ptr_in) {
   return number;
 }
 
+void buf_emit(type) {
+  EMIT
+    TYPE, type,
+    TEXT, g_buf
+  END
+}
+
+void error_con(int connection, char*message) {
+  sprintf(g_buf, message, strerror(errno));
+  EMIT
+    TYPE, "error",
+    CONNECTION, connection,
+    TEXT, g_buf
+  END
+}
+
+void error_gen(int test, char*message) {
+  if(test) {
+    sprintf(g_buf, message, strerror(errno));
+    buf_emit("error");
+  }
+}
+
 int relaysetup(struct client*t) {
-  struct sockaddr_in  name;
+  struct sockaddr_in name;
   struct hostent *hp;
-  int ret;
 
   if (t->active) {
     if(t->serverfd) {
+      EMIT
+        TYPE, "shutdown"
+      END
+
       shutdown(t->serverfd, SHUT_RDWR);
       close(t->serverfd);
     }
@@ -316,51 +340,34 @@ int relaysetup(struct client*t) {
 
   // Couldn't resolve
   if(!hp) {
-    sprintf(g_buf, "Couldn't resolve host %s", t->host);
-    EMIT
-      TYPE, "error",
-      TEXT, g_buf
-    END
+    sprintf(g_buf, "Couldn't resolve host %s : %s", t->host, strerror(errno));
+    buf_emit("error");
 
     return(0);  // This is not a stupendous response
   }
 
   t->serverfd = socket(AF_INET, SOCK_STREAM, 0);
 
-  ret = setsockopt(t->serverfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger));
-  if(ret) {
-
-    EMIT
-      TYPE, "error",
-      TEXT, "setsockopt"
-    END
-  }
+  error_gen(
+    setsockopt(t->serverfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger)),
+    "Couldn't set socket options: %s"
+  );
 
   name.sin_family = AF_INET;
   name.sin_port = htons(t->port);
   memcpy(&name.sin_addr.s_addr, hp->h_addr, hp->h_length);
-  ret = connect(t->serverfd, (const struct sockaddr*)&name, sizeof(name));
 
-  if(ret) {
+  error_gen(
+    connect(t->serverfd, (const struct sockaddr*)&name, sizeof(name)),
+    "Couldn't connect: %s"
+  );
 
-    EMIT
-      TYPE, "error",
-      TEXT, "connect"
-    END
-  }
-
-  sprintf(g_buf,"Connecting to %s:%d", t->host, t->port);
-  EMIT
-    TYPE, "info",
-    TEXT, g_buf
-  END
+  sprintf(g_buf, "Connecting to %s:%d", t->host, t->port);
+  buf_emit("info");
 
   fcntl(t->serverfd, F_SETFL, O_NONBLOCK);
 
-  if(!t->toclient) {
-    t->coffset = t->toclient = CHR(t->tcmax);
-  }
-
+  t->coffset = t->toclient;
   t->todo |= WRITESERVER;
 
   return(1);
@@ -384,13 +391,11 @@ void process(struct client*toprocess) {
   // GET /page HTTP/1.1 ...
   // This just copies the part GET << THIS>> HTTP/1.0 to req
 
-  if(g_absolute) {
+  if(g_absolute.host) {
 
     if(!toprocess->host) {
-      for(ptr = g_absolute;*ptr != ':';ptr++);
-      ptr[0] = 0;
-      toprocess->host = copybytes(g_absolute, ptr);
-      toprocess->port = my_atoi(&ptr);
+      toprocess->host = copybytes(g_absolute.host, g_absolute.host + strlen(g_absolute.host));
+      toprocess->port = g_absolute.port;
       relaysetup(toprocess);
     }
   } else {  
@@ -446,7 +451,6 @@ void process(struct client*toprocess) {
         free(toprocess->host);
 
         toprocess->host = host_compare;
-
         relaysetup(toprocess);
       }
 
@@ -463,39 +467,25 @@ void process(struct client*toprocess) {
 
 // Associates new connection with a database entry
 void newconnection(int connectionID) {  
-  struct sockaddr addr;
-  socklen_t addrlen = sizeof(addr);
   struct client*cur;
   int which;
 
-  getpeername(connectionID, &addr, &addrlen);
   fcntl(connectionID, F_SETFL, O_NONBLOCK);
 
   for(
     which = 0;
-    (which < MAX && !g_dbase[which].active == FALSE);
+    (which < MAX && g_dbase[which].active);
     which++
   );
 
   cur = &g_dbase[which];
-  cur->active = TRUE;
+  memset(cur, 0, sizeof(struct client));
+
+  cur->active   = TRUE;
   cur->clientfd = connectionID;
-  cur->tcmax = LARGE;
-  cur->tsmax = LARGE;
-  cur->todo |= READCLIENT;
-  cur->host = 0;
-
-  // If memory has been allocated before
-  if(cur->toserver) {
-
-    // Just zero it
-    memset(cur->toserver, 0, cur->tsmax);
-
-  } else {
-
-    // If not, than malloc
-    cur->toserver = CHR(cur->tsmax);
-  }
+  cur->todo     = READCLIENT;
+  cur->toserver = CHR(LARGE);
+  cur->toclient = CHR(LARGE);
 
   return;
 }
@@ -507,22 +497,22 @@ void sendstuff() {
     which,
     size;
 
-  struct client*t;
+  struct client *t = g_dbase;
 
-  for(which = 0;which < MAX;which++) {  
-    if(g_dbase[which].active == TRUE) {
-      t = &g_dbase[which];
+  for(which = 0;which < MAX;which++, t++) {  
+    if(t->active) {
       
       // Reading from the client
       if(FD_ISSET(t->clientfd, &g_rg_fds)) {
-        t->tssize = wraprecv(t->clientfd, t->toserver, t->tsmax, 0, which);
+        t->tssize = wraprecv(t->clientfd, t->toserver, LARGE, 0, which);
         t->soffset = t->toserver;
 
         if(t->tssize > 0) {
           t->todo |= WRITESERVER;
-
           process(t);
 
+        } else if (t->tssize == -1) {
+          error_con(which, "Failed to read from client : %s");
         } else {
           done(t, which);
         }
@@ -535,24 +525,31 @@ void sendstuff() {
 
       // Writing to the server
       if(FD_ISSET(t->serverfd, &g_wg_fds)) {  
-
         size = write(t->serverfd, t->soffset, t->tssize - (t->soffset - t->toserver));
-        t->soffset += size;
 
-        // we are done
-        if(t->soffset - t->toserver == t->tssize) {
-          t->todo |= READSERVER;
-          t->todo &= ~WRITESERVER;
+        if (size == -1) {
+          error_con(which, "Failed to write to server : %s");
+        } else {
+
+          t->soffset += size;
+
+          // we are done
+          if(t->soffset - t->toserver == t->tssize) {
+            t->todo |= READSERVER;
+            t->todo &= ~WRITESERVER;
+          }
         }
       }
 
       // Reading from the server
       if(FD_ISSET(t->serverfd, &g_rg_fds)) {  
-        t->tcsize = wraprecv(t->serverfd, t->toclient, t->tcmax, 0, which);
+        t->tcsize = wraprecv(t->serverfd, t->toclient, LARGE, 0, which);
         t->coffset = t->toclient;
 
         if(t->tcsize > 0) {
           t->todo |= WRITECLIENT;
+        } else if(t->tcsize == -1) {
+          error_con(which, "Failed to read from server : %s");
         } else {
           done(t, which);
         }
@@ -560,9 +557,15 @@ void sendstuff() {
         t->todo &= ~READSERVER;
       }
 
+      // Write to client
       if(FD_ISSET(t->clientfd, &g_wg_fds)) {  
         size = write(t->clientfd, t->coffset, t->tcsize - (t->coffset - t->toclient));
-        t->coffset += size;
+
+        if(size == -1) {
+          error_con(which, "Failed to write to client : %s");
+        } else {
+          t->coffset += size;
+        }
 
         if(t->coffset - t->toclient == t->tcsize) {  
           t->todo |= READCLIENT;
@@ -645,7 +648,9 @@ int main(int argc, char*argv[]) {
   struct sockaddr_in   proxy;
   socklen_t addrlen = sizeof(addr);
 
-  char *progname = argv[0];
+  char 
+    *progname = argv[0],
+    *ptr;
 
   signal(SIGPIPE, handle_bp);
   signal(SIGQUIT, closeAll);
@@ -657,6 +662,8 @@ int main(int argc, char*argv[]) {
 
   memset(g_dbase, 0, sizeof(g_dbase));
 
+  g_absolute.host = 0;
+
   for(; argc > 0; argc--, argv++) {
     if(ISA("-p", "--port")) {
       if(--argc)  {
@@ -664,7 +671,12 @@ int main(int argc, char*argv[]) {
       }
     } else if(ISA("-a", "--absolute")) {
       if(--argc) {
-        g_absolute = *++argv;
+        argv++;
+
+        for(ptr = argv[0];*ptr != ':';ptr++);
+        ptr[0] = 0;
+        g_absolute.host = copybytes(argv[0], ptr);
+        g_absolute.port = my_atoi(&ptr);
       }
     } else if(ISA("-H", "--help")) {
       printf("%s\n", progname);
@@ -681,56 +693,36 @@ int main(int argc, char*argv[]) {
   proxy.sin_addr.s_addr = INADDR_ANY;
   g_proxyfd = socket(PF_INET, SOCK_STREAM, 0);
 
-  if ( setsockopt(g_proxyfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger)) ) {
-    EMIT
-      TYPE, "error",
-      TEXT, "setsockopt"
-    END
-  }
+  error_gen(
+    setsockopt(g_proxyfd, SOL_SOCKET, SO_LINGER, &g_linger_t, sizeof(struct linger)),
+    "setsockopt: "
+  );
 
   while(bind(g_proxyfd, (struct sockaddr*)&proxy, sizeof(proxy)) < 0) {  
     sprintf(g_buf, "Failed to bind to port %d", ntohs(proxy.sin_port));
-    EMIT
-      TYPE, "info",
-      TEXT, g_buf
-    END
+    buf_emit("info");
 
     proxy.sin_port += htons(1);
     sprintf(g_buf, "Trying port %d", ntohs(proxy.sin_port));
-
-    EMIT
-      TYPE, "info",
-      TEXT, g_buf
-    END
+    buf_emit("info");
   }
 
-  if ( getsockname(g_proxyfd, &addr, &addrlen) ) {
-    EMIT
-      TYPE, "error",
-      TEXT, "getsockname"
-    END
-  }
+  error_gen(
+    getsockname(g_proxyfd, &addr, &addrlen),
+    "getsockname: "
+  ); 
 
-  if ( listen(g_proxyfd, MAX) ) {
-    EMIT
-      TYPE, "error",
-      TEXT, "listen"
-    END
-  }
+  error_gen(
+    listen(g_proxyfd, MAX),
+    "listen: "
+  );
 
   sprintf(g_buf, "Listening on port %d", ntohs(proxy.sin_port));
+  buf_emit("info");
 
-  EMIT
-    TYPE, "info",
-    TEXT, g_buf
-  END
-
-  if(g_absolute) {
-    sprintf(g_buf, "Forwarding requests to %s", g_absolute);
-    EMIT
-      TYPE, "info",
-      TEXT, g_buf
-    END
+  if(g_absolute.host) {
+    sprintf(g_buf, "Forwarding requests to %s", g_absolute.host);
+    buf_emit("info");
   }
 
   for(;;) {
