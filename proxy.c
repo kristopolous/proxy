@@ -100,7 +100,7 @@ struct {
   int port;
 } g_absolute;
 
-char g_buf[LARGE * 4];
+char g_buf[LARGE * 3];
 
 const char  *g_strhost = "Host: ";
 
@@ -160,40 +160,33 @@ ssize_t wraprecv(int socket, void *buf, size_t len, int flags, int which) {
   }
 
   for(ix = 0; ix < ret; ix++) {
-    if(ptr[ix] < 32 || ptr[ix] == '"' || ptr[ix] == '\\') {
+    if(ptr[ix] < 32 || ptr[ix] == '"' || ptr[ix] == '\\' || ptr[ix] == 0x7F) {
       binbuf[0] = '\\';
 
       switch(ptr[ix]) {
-        case '\\':
-          binbuf[1] = '\\';
-          binbuf += 2;
-          break;
-
-        case '"':
-          binbuf[1] = '"';
-          binbuf += 2;
-          break;
-
-        case '\n':
-          binbuf[1] = 'n';
-          binbuf += 2;
-          break;
-
-        case '\r':
-          binbuf[1] = 'r';
-          binbuf += 2;
-          break;
-
-        case '\t':
-          binbuf[1] = 't';
-          binbuf += 2;
-          break;
+        case '"' : binbuf[1] = '"'; binbuf += 2; break;
+        case '\\': binbuf[1] = '\\'; binbuf += 2; break;
+        case '\b': binbuf[1] = 'b'; binbuf += 2; break;
+        case '\f': binbuf[1] = 'f'; binbuf += 2; break;
+        case '\n': binbuf[1] = 'n'; binbuf += 2; break;
+        case '\r': binbuf[1] = 'r'; binbuf += 2; break;
+        case '\t': binbuf[1] = 't'; binbuf += 2; break;
 
         default:
           binbuf[1] = 'u';
-          binbuf[2] = HEX[ptr[ix] >> 4];
+          binbuf[2] = HEX[(unsigned char)ptr[ix] >> 4];
           binbuf[3] = HEX[ptr[ix] & 0xf];
-          binbuf += 4;
+
+          if(ix < ret) {
+            ix++;
+            binbuf[4] = HEX[(unsigned char)ptr[ix] >> 4];
+            binbuf[5] = HEX[ptr[ix] & 0xf];
+          } else {
+            binbuf[4] = '0';
+            binbuf[5] = '0';
+          }
+
+          binbuf += 6;
           break;
       }
     } else {

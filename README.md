@@ -48,7 +48,7 @@ For
  * close : the empty string
 
 ## Data Notes
-Binary is encoded as \uXX where XX refers to the encoded character.
+Binary is encoded as \uXXYY where XX is the MSB (left-most) byte and YY is the LSB (right-most) byte.
 
 ## Flags
 The flags are unnecessarily compact and overly confusing; but if you really want to know what they mean, pay close attention.
