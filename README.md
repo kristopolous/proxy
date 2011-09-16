@@ -12,13 +12,14 @@ The proxy itself outputs in JSON messages: One per newline. Newlines in payloads
 An example of some common output would look like this:
 
     {"ts":1315359408.751000,"type":"payload","id":0,"
-    text":"HTTP/1.1 200 OK\r\nDate: Wed, 07 Sep 2011 
-    01:09:36 GMT\r\nStatus: 200 OK\r\nConnection: kee
-    p-alive\r\nETag: fa147ca0-bb1b-012e-a5c1-704da221
-    2453\r\nTransfer-Encoding: chunked\r\nContent-Typ
-    e: text/plain\r\nSet-Cookie: sess=3aa3477df123eb2
-    6c025b675bbfb8567; path=/; expires=Tue, 11-Oct-20
-    11 18:29:36 GMT; HttpOnly\r\n\r\n"}
+    ip":"127.0.0.1","port":33872,"text":"HTTP/1.1 200
+    OK\r\nDate: Wed, 07 Sep 2011 01:09:36 GMT\r\nStat
+    us: 200 OK\r\nConnection: keep-alive\r\nETag:fa14
+    7ca0-bb1b-012e-a5c1-704da2212453\r\nTransfer-Enco
+    ding: chunked\r\nContent-Type: text/plain\r\nSet-
+    Cookie: sess=3aa3477df123eb26c025b675bbfb8567; pa
+    th=/; expires=Tue, 11-Oct-2011 18:29:36 GMT; Http
+    Only\r\n\r\n"}
 
 The fields are explained below
 
@@ -37,6 +38,12 @@ One of the following:
 ### { id: [ number ] }
 The proxy is of course, multi-plexed, serving multiple connections simultaneously.  These connections are indexed in order to keep track of them, this number is their index. 
 The master connection is "-1" and only shows up when bringing things up or down.
+
+### { ip: [ string ] }
+The ip address of the client machine that is connected
+
+### { port: [ number] }
+The outgoing port that is being used by the client.
 
 ### { text: [ string ] }
 

@@ -73,26 +73,49 @@ enum {
 
 struct client {
   char  
-    *host,      // The host to connect to
-    
-    *toclient,  // Response from host
-    *toserver,  // What to send to the server
+    // IPADDR of client
+    clientHost[INET6_ADDRSTRLEN],
 
-    *coffset,   // Writing to the client
-    *soffset,   // Writing to the server
+    // The host to connect to
+    *host, 
 
-    active;     // Is the client active
+    // Response from host
+    *toclient,
+
+    // What to send to the server
+    *toserver,  
+
+    // Writing to the client
+    *coffset,
+
+    // Writing to the server
+    *soffset,  
+
+    // Is the client active
+    active;
 
   int
-    tcsize,     // To client in use size
-    tssize,     // To server in use size
+    // To client in use size
+    tcsize,
 
-    todo,       // What to do
+    // To server in use size
+    tssize,
 
-    clientfd,   // File handle of client connected
-    serverfd,   // File handle of server
+    // What to do
+    todo,
 
-    port;       // What port of the host
+    // File handle of client connected
+    clientfd,
+
+    // File handle of server
+    serverfd,
+
+    // What port of the host
+    port;
+
+  unsigned short
+    // Port of client
+    clientPort;
 };
 
 struct {
@@ -119,7 +142,7 @@ struct linger g_linger_t = { 1, 0 };
 
 void emit(int firstarg, ...) {
   struct timeval tp;
-  int type;
+  int type, connection;
 
   va_list ap;
 
@@ -133,10 +156,15 @@ void emit(int firstarg, ...) {
 
     if(type == TYPE) {
       printf(",\"type\":\"%s\"", va_arg(ap, char*));
+
     } else if(type == TEXT) {
       printf(",\"text\":\"%s\"", va_arg(ap, char*));
+
     } else if(type == CONNECTION) {
-      printf(",\"id\":%d", va_arg(ap, int));
+      connection = va_arg(ap, int); 
+      printf(",\"id\":%d", connection);
+      printf(",\"ip\":\"%s\"", g_dbase[connection].clientHost);
+      printf(",\"port\":%d", g_dbase[connection].clientPort);
     }
   }
 
@@ -222,12 +250,12 @@ void done(struct client*cur, int id) {
     NULLFREE(cur->toclient);
     NULLFREE(cur->host);
 
-    memset(cur, 0, sizeof(struct client));
-
     EMIT
       TYPE, "close",
       CONNECTION, id
     END
+
+    memset(cur, 0, sizeof(struct client));
   }
 }
 
@@ -479,6 +507,34 @@ void newconnection(int connectionID) {
   cur->todo     = READCLIENT;
   cur->toserver = CHR(LARGE);
   cur->toclient = CHR(LARGE);
+
+  // Inspired from http://beej.us/guide/bgnet/output/html/multipage/getpeernameman.html
+  {
+    union {
+      struct sockaddr addr;
+      struct sockaddr_storage storage;
+      struct sockaddr_in in;
+    } client;
+
+    socklen_t len = sizeof(client);
+
+    getpeername(
+      connectionID, 
+      &client.addr, 
+      &len
+    );
+
+    inet_ntop(
+      AF_INET, 
+      &client.in.sin_addr, 
+
+      // Set the hostname
+      cur->clientHost,  
+      sizeof(cur->clientHost)
+    );
+
+    cur->clientPort = ntohs(client.in.sin_port);
+  }
 
   return;
 }
