@@ -6,7 +6,10 @@ you can set an absolute address.  That is to say that all traffic going to port,
 to port 80, after it's dumped to the screen of course.
 
 ## Output
-The proxy itself outputs in JSON messages: One per newline. Newlines in payloads are escaped. Nice, glossy UIs (or ugly obscene ones) are up to you.
+The proxy itself outputs in JSON messages: One per newline. Newlines in payloads are 
+escaped. Nice, glossy UIs (or ugly obscene ones) are up to you. A really basic 
+filtering and extraction engine written in ruby is included in the examples directory.  
+In classic ruby mentality, it is left undocumented.
 
 ## Format
 An example of some common output would look like this:
