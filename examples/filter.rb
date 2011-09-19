@@ -26,7 +26,8 @@ STDIN.each_line do | line |
   catch "MovingOn" do
     filter.each do | key, value |
       if obj.has_key? key and obj[key] == value
-        if extract.length
+
+        if extract.length > 0
           extract.each do | key |
             puts obj[key]
           end
