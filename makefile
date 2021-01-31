@@ -1,5 +1,4 @@
-CFLAGS=-O3 -Wall
-LDFLAGS=-s
+CFLAGS=-g -Wall
 proxy: proxy.o
 clean:
 	rm -f *.o proxy core

@@ -155,7 +155,8 @@ void emit(int firstarg, ...) {
   for(type = firstarg; type != _END; type = va_arg(ap, int)) {
 
     if(type == TYPE) {
-      printf(",\"type\":\"%s\"", va_arg(ap, char*));
+      char * tmp = va_arg(ap, char*);
+      printf(",\"type\":\"%s\"", tmp);
 
     } else if(type == TEXT) {
       printf(",\"text\":\"%s\"", va_arg(ap, char*));
@@ -314,7 +315,7 @@ int my_atoi(char**ptr_in) {
   return number;
 }
 
-void buf_emit(type) {
+void buf_emit(char* type) {
   EMIT
     TYPE, type,
     TEXT, g_buf
